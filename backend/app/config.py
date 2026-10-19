@@ -18,6 +18,19 @@ class Settings(BaseSettings):
     # 本地 Mac mini 验收通常只有 HTTP，没有 HTTPS；公网部署时须显式开启。
     session_cookie_secure: bool = False
 
+    storage_root: str = "./data/documents"
+    max_upload_bytes: int = 20 * 1024 * 1024
+
+    # 为空时使用确定性替身，仅供开发与自动化测试。
+    embedding_base_url: str = ""
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_api_key: str = ""
+
+    retrieval_top_k: int = 6
+    answer_model: str = "deepseek-chat"
+    answer_base_url: str = ""
+    answer_api_key: str = ""
+
     allow_public_signup: bool = False
 
 

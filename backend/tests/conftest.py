@@ -37,7 +37,10 @@ def session() -> Iterator[Session]:
         s.rollback()
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE users, teams, team_memberships, knowledge_bases, session_tokens CASCADE")
+            text(
+                "TRUNCATE users, teams, team_memberships, knowledge_bases, session_tokens, "
+                "documents, document_chunks, processing_tasks CASCADE"
+            )
         )
 
 

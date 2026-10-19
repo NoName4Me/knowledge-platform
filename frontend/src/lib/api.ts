@@ -14,6 +14,32 @@ export type KnowledgeBase = {
   name: string;
 };
 
+export type DocumentStatus = "pending" | "processing" | "ready" | "failed";
+
+export type DocumentItem = {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  filename: string;
+  size_bytes: number;
+  status: DocumentStatus;
+  failure_reason: string | null;
+  created_at: string;
+};
+
+export type Citation = {
+  document_id: string;
+  document_title: string;
+  locator_label: string;
+  excerpt: string;
+};
+
+export type AskResponse = {
+  answer: string;
+  grounded: boolean;
+  citations: Citation[];
+};
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -25,7 +51,6 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
     ...init,
   });
 
@@ -41,19 +66,44 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+function jsonInit(method: string, payload: unknown): RequestInit {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  };
+}
+
 export const api = {
   login: (email: string, password: string) =>
-    request<MeResponse>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    }),
+    request<MeResponse>("/api/auth/login", jsonInit("POST", { email, password })),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
   me: () => request<MeResponse>("/api/auth/me"),
+
   listKnowledgeBases: (teamId: string) =>
     request<KnowledgeBase[]>(`/api/teams/${teamId}/knowledge-bases`),
   createKnowledgeBase: (teamId: string, name: string) =>
-    request<KnowledgeBase>(`/api/teams/${teamId}/knowledge-bases`, {
+    request<KnowledgeBase>(`/api/teams/${teamId}/knowledge-bases`, jsonInit("POST", { name })),
+
+  listDocuments: (teamId: string, knowledgeBaseId: string) =>
+    request<DocumentItem[]>(
+      `/api/teams/${teamId}/documents?knowledge_base_id=${knowledgeBaseId}`,
+    ),
+  uploadDocument: (teamId: string, knowledgeBaseId: string, file: File) => {
+    const form = new FormData();
+    form.append("knowledge_base_id", knowledgeBaseId);
+    form.append("file", file);
+    return request<DocumentItem>(`/api/teams/${teamId}/documents`, {
       method: "POST",
-      body: JSON.stringify({ name }),
-    }),
+      body: form,
+    });
+  },
+  deleteDocument: (teamId: string, documentId: string) =>
+    request<void>(`/api/teams/${teamId}/documents/${documentId}`, { method: "DELETE" }),
+
+  ask: (teamId: string, knowledgeBaseId: string, question: string) =>
+    request<AskResponse>(
+      `/api/teams/${teamId}/ask`,
+      jsonInit("POST", { knowledge_base_id: knowledgeBaseId, question }),
+    ),
 };

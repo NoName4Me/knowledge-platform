@@ -20,6 +20,9 @@ services:
       KP_DATABASE_URL: postgresql+psycopg://${KP_DB_USER:-kp}:${KP_DB_PASSWORD:-kp}@db:5432/${KP_DB_NAME:-kp}
       KP_ENVIRONMENT: ${KP_ENVIRONMENT:-production}
       KP_SECRET_KEY: ${KP_SECRET_KEY:?KP_SECRET_KEY is required}
+      KP_STORAGE_ROOT: /data/documents
+    volumes:
+      - doc-storage:/data/documents
     depends_on:
       db:
         condition: service_healthy
@@ -33,6 +36,21 @@ services:
       retries: 5
     restart: unless-stopped
 
+  worker:
+    build: ./backend
+    environment:
+      KP_DATABASE_URL: postgresql+psycopg://${KP_DB_USER:-kp}:${KP_DB_PASSWORD:-kp}@db:5432/${KP_DB_NAME:-kp}
+      KP_ENVIRONMENT: ${KP_ENVIRONMENT:-production}
+      KP_SECRET_KEY: ${KP_SECRET_KEY:?KP_SECRET_KEY is required}
+      KP_STORAGE_ROOT: /data/documents
+    volumes:
+      - doc-storage:/data/documents
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+
   web:
     build: ./frontend
     depends_on:
@@ -43,3 +61,4 @@ services:
 
 volumes:
   db-data:
+  doc-storage:
