@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.csrf import issue_prelogin_token
 from app.db import apply_context, get_session
 from app.models import SessionToken, User
+from app.ratelimit import FixedWindowLimiter, enforce_rate_limit
 from app.schemas import CsrfOut, LoginRequest, MeOut, TeamSummary, UserOut
 from app.security import (
     derive_csrf_token,
@@ -21,6 +22,12 @@ from app.security import (
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
+email_login_limiter = FixedWindowLimiter(
+    settings.login_email_rate_limit, settings.login_rate_window_seconds
+)
+ip_login_limiter = FixedWindowLimiter(
+    settings.login_ip_rate_limit, settings.login_rate_window_seconds
+)
 
 
 def _to_user_out(user: User) -> UserOut:
@@ -65,8 +72,20 @@ def csrf(response: Response) -> CsrfOut:
 
 @router.post("/login", response_model=MeOut)
 def login(
-    payload: LoginRequest, response: Response, session: Session = Depends(get_session)
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_session),
 ) -> MeOut:
+    # docker-compose 只把 API 暴露在 Compose 内网，外部请求经 Nginx 后
+    # 才可信转发 X-Real-IP；直接访问时使用连接来源。
+    client_ip = request.client.host if request.client else "unknown"
+    if client_ip.startswith(("172.", "10.", "192.168.")):
+        client_ip = request.headers.get("x-real-ip") or client_ip
+    normalized_email = payload.email.lower()
+    enforce_rate_limit(email_login_limiter, f"{client_ip}:{normalized_email}")
+    enforce_rate_limit(ip_login_limiter, client_ip)
+
     user = session.scalars(select(User).where(User.email == payload.email.lower())).one_or_none()
     if (
         user is None

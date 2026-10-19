@@ -5,12 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.csrf import CsrfMiddleware
+from app.observability import RequestLogMiddleware
 from app.routers import ask, auth, conversations, documents, teams
 
 settings = get_settings()
 
 app = FastAPI(title=settings.app_name)
 
+app.add_middleware(RequestLogMiddleware)
 app.add_middleware(CsrfMiddleware)
 app.add_middleware(
     CORSMiddleware,

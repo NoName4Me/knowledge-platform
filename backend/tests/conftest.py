@@ -73,9 +73,17 @@ def session() -> Iterator[Session]:
 def client(session: Session) -> Iterator[TestClient]:
     from app import db
     from app.main import app
+    from app.routers import ask, auth, conversations
 
     db.engine = app_engine
     db.SessionLocal = AppSession
+    for limiter in (
+        auth.email_login_limiter,
+        auth.ip_login_limiter,
+        ask.ask_limiter,
+        conversations.answer_limiter,
+    ):
+        limiter.reset()
     with TestClient(app) as c:
         _install_csrf(c)
         yield c

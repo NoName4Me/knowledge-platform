@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     # 同步问答请求中途崩溃时，遗留 answering 轮次超过此窗口后收敛为 interrupted。
     turn_timeout_seconds: int = 180
 
+    # 当前部署为单 API 进程，使用进程内固定窗口限流。
+    login_email_rate_limit: int = 10
+    login_ip_rate_limit: int = 50
+    login_rate_window_seconds: int = 5 * 60
+    ask_rate_limit: int = 120
+    ask_rate_window_seconds: int = 60
+
     allow_public_signup: bool = False
 
 

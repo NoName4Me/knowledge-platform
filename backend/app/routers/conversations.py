@@ -23,6 +23,7 @@ from app.conversations import (
 )
 from app.db import apply_context, get_session
 from app.models import Conversation, KnowledgeBase, Turn
+from app.ratelimit import FixedWindowLimiter, enforce_rate_limit
 from app.schemas import (
     ConversationCreate,
     ConversationOut,
@@ -36,6 +37,9 @@ router = APIRouter(
     tags=["conversations"],
 )
 settings = get_settings()
+answer_limiter = FixedWindowLimiter(
+    settings.ask_rate_limit, settings.ask_rate_window_seconds
+)
 
 
 def _close_stale_turns(session: Session, conversation_id: uuid.UUID) -> None:
@@ -131,6 +135,7 @@ def ask_in_conversation(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> TurnOut:
+    enforce_rate_limit(answer_limiter, str(context.user.id))
     try:
         get_owned_conversation(session, context, knowledge_base_id, conversation_id)
     except ConversationNotFound as exc:
@@ -167,6 +172,7 @@ def ask_in_conversation_stream(
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     """SSE 流式回答；先持久化占位轮次，断流后可用轮次读取接口恢复。"""
+    enforce_rate_limit(answer_limiter, str(context.user.id))
     try:
         get_owned_conversation(session, context, knowledge_base_id, conversation_id)
     except ConversationNotFound as exc:
