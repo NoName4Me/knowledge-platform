@@ -41,7 +41,8 @@
 - 运行元数据与逐题结果保存在本机 `/tmp/kp-eval-single-final/` 与 `/tmp/kp-eval-concurrent/`
   （`run-metadata.json`、`results.jsonl`、`review-blind.jsonl`）。结果含模型答案与引用，不入库。
 - 复跑命令见 [`evaluation/README.md`](../../evaluation/README.md)；`evaluation/results/` 只保留目录占位。
-- CI：GitHub Actions 在推送后执行 `evaluation-contract`（题集与语料合同校验）、后端与前端任务。
+- CI：[run 39271250129](https://github.com/NoName4Me/knowledge-platform/actions/runs/39271250129)
+  于提交 `906ea40` 全部通过：`evaluation-contract`（题集与语料合同校验）、`backend`、`frontend`。
 
 ## 后续
 
