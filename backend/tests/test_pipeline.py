@@ -101,6 +101,48 @@ def test_retrieval_excludes_other_team(client, session):
     assert results == []
 
 
+def test_retrieval_rejects_unrelated_nearest_chunks(client, session):
+    from app.retrieval import retrieve
+
+    team, kb_id = _prepare(client, session)
+    _upload(client, team.id, kb_id, content="公开资料只说明报销需要有效票据。")
+    _run_worker_once()
+
+    results = retrieve(
+        session,
+        team.id,
+        kb_id,
+        "PostgreSQL VACUUM 最多允许多少个并行工作进程？",
+        distance_limit=0.0,
+        min_lexical_score=1.0,
+    )
+    assert results == []
+
+
+def test_retrieval_matches_keyword_even_when_vector_distance_is_large(client, session):
+    from app.retrieval import retrieve
+
+    team, kb_id = _prepare(client, session)
+    _upload(
+        client,
+        team.id,
+        kb_id,
+        content="制度规定：差旅报销必须提交交通发票和出差审批单。",
+    )
+    _run_worker_once()
+
+    results = retrieve(
+        session,
+        team.id,
+        kb_id,
+        "差旅报销需要哪些材料？",
+        distance_limit=0.0,
+        min_lexical_score=0.1,
+    )
+    assert results
+    assert "交通发票" in results[0].content
+
+
 def test_ask_returns_citations(client, session):
     team, kb_id = _prepare(client, session)
     _upload(client, team.id, kb_id, content="年假规定：入职满一年可享五天年假。")

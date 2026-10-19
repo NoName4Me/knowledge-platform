@@ -1,0 +1,13 @@
+来源：MDN《CSS Grid Layout》与《minmax()》
+原始地址：https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_grid_layout
+许可：CC BY-SA 2.5
+
+CSS Grid 通过 display: grid 创建网格容器。grid-template-columns 定义显式列轨道，
+grid-template-rows 定义显式行轨道。fr 单位表示轨道可分配的一部分剩余空间；
+两个轨道使用 1fr 与 2fr 时，第二个轨道分配的空间是第一个的两倍。
+
+grid-column 和 grid-row 可以让项目跨越多条轨道。grid-column: 1 / 3 表示从第 1 条网格线开始，
+到第 3 条网格线结束，因此项目跨越两条列轨道。gap 设置轨道之间的间距，不增加轨道宽度。
+
+minmax(min, max) 为轨道设置最小和最大尺寸。auto-fit 与 auto-fill 常用于创建响应式卡片网格。
+auto-fit 会折叠空轨道并让已有项目扩展，auto-fill 即使没有项目也保留空轨道。

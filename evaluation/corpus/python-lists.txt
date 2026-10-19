@@ -1,0 +1,12 @@
+来源：Python 3.12 官方教程《Data Structures》
+原始地址：https://docs.python.org/3.12/tutorial/datastructures.html
+许可：Python Software Foundation License
+
+list 是可变序列，支持用索引读取和切片。append 在列表末尾添加一个元素。
+extend 接受一个可迭代对象并把其元素逐个加入列表。insert 在指定索引之前插入元素。
+remove 删除第一个值等于参数的列表元素；如果值不存在则抛出 ValueError。
+
+pop 可以接收索引，删除并返回该位置的元素；不传索引时处理最后一个元素。
+用 pop 可以在列表中把结构当作栈使用，append 入栈，pop 出栈。
+clear 删除列表的全部元素。sort 原地排序，reverse 原地反转。
+列表推导式提供从序列创建列表的简洁写法，例如 [x**2 for x in range(5)]。

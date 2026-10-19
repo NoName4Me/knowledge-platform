@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
 
     retrieval_top_k: int = 6
+    retrieval_candidate_k: int = 40
+    retrieval_distance_limit: float = 1.25
+    retrieval_min_lexical_score: float = 0.2
     answer_model: str = "deepseek-flash"
     answer_base_url: str = ""
     answer_api_key: str = ""

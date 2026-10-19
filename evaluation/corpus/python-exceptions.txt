@@ -1,0 +1,15 @@
+来源：Python 3.12 官方教程《Errors and Exceptions》
+原始地址：https://docs.python.org/3.12/tutorial/errors.html
+许可：Python Software Foundation License
+
+try 语句可以有一个或多个 except 子句，并可以有一个 else 子句和一个 finally 子句。
+except 子句处理异常，else 子句仅在 try 块没有抛出异常时执行，finally 子句在所有情况下执行。
+不指定异常类型的 except 会捕获所有异常，通常只用于调试或日志记录。
+
+raise 可以主动抛出异常。抛出类时，Python 会不带参数地实例化它；抛出实例时可以附带错误信息。
+自定义异常通常继承 Exception，而不是 BaseException，以免拦截系统退出信号。
+with 语句使用上下文管理协议，确保退出时执行清理；文件对象是典型例子。
+
+Python 的默认参数表达式在函数定义执行时只求值一次，而不是每次调用都重新求值。
+因此把可变对象作为默认值会导致后续调用共享同一个对象，通常应使用 None 作为默认值，
+并在函数内部创建新对象。

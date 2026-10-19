@@ -1,0 +1,13 @@
+来源：MDN《HTML: HyperText Markup Language》与《<img>》
+原始地址：https://developer.mozilla.org/en-US/docs/Web/HTML
+许可：CC BY-SA 2.5
+
+语义化 HTML 通过元素名称描述内容含义，而不是只描述外观。header 通常表示页面或章节的引言区，
+nav 表示导航链接，main 表示文档主要内容且每个文档通常只有一个，article 表示可独立分发的内容，
+section 表示按主题分组的内容。div 和 span 没有特定语义，只用于样式或脚本需要容器时。
+
+HTML 元素分为 void element 和普通元素。br、img、input、meta 和 link 等 void element
+不能包含子节点，也没有结束标签。浏览器会把结束标签形式的写法规范化，但来源 HTML 不应依赖它。
+
+img 的 src 指定图片资源，alt 提供等价文本。alt 应描述图片用途；仅用于装饰且可由周围内容替代的图片
+可以使用空 alt。懒加载可以使用 loading="lazy"，但它不应被当作完成布局或替代文本的机制。

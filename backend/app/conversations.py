@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.answering import get_answer_provider
+from app.answering import get_answer_provider, indicates_insufficient_grounding
 from app.auth import TeamContext
 from app.db import apply_context
 from app.models import CitationRecord, Conversation, Document, KnowledgeBase, Turn
@@ -137,6 +137,13 @@ def _validate_answer(answer: str, chunks: list[RetrievedChunk]) -> list[Retrieve
     if not references or any(value < 1 or value > len(chunks) for value in references):
         raise InvalidAnswer
     return [chunks[value - 1] for value in sorted(references)]
+
+
+def _answer_is_insufficient(answer: str) -> bool:
+    return (
+        indicates_insufficient_grounding(answer)
+        and len(answer.strip()) <= 100
+    )
 
 
 def begin_turn(
@@ -292,6 +299,8 @@ def _publish_answer(
     chunks: list[RetrievedChunk],
 ) -> TurnOutData:
     """校验引用与来源后一次性发布最终答案。"""
+    if _answer_is_insufficient(answer_text):
+        return _finish_insufficient(session, context, turn)
     used = _validate_answer(answer_text, chunks)
     live = _live_documents(session, used)
     if {chunk.document_id for chunk in used} - live:

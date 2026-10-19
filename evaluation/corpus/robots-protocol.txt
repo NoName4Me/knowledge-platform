@@ -1,0 +1,14 @@
+来源：RFC 9309《Robots Exclusion Protocol》，IETF
+原始地址：https://www.rfc-editor.org/rfc/rfc9309.html
+许可：IETF Trust Legal Provisions
+
+robots.txt 位于站点根路径。抓取器从一个或多个用户代理组中选择适用于自己的规则。
+组内可以有 Allow 和 Disallow 行；路径匹配不区分大小写，并支持星号通配符和行尾美元符号。
+当一条路径同时匹配 Allow 与 Disallow 规则时，匹配模式最长的那条规则优先；
+如果长度相同，Allow 优先。
+
+如果 robots.txt 的响应状态是 2xx，抓取器应解析其内容。状态 4xx 表示内容不存在，
+抓取器可以访问任意资源。状态 5xx 表示服务器无法访问 robots.txt，抓取器应假定站点完全禁止抓取。
+网络错误与 5xx 采用相同处理。
+
+robots.txt 中的规则不能被用于控制文档索引、缓存、排名或展示；它只提供抓取行为建议。

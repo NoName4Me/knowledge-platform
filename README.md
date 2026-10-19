@@ -2,7 +2,7 @@
 
 面向通用文档场景的团队知识工作台。V1 目标：上传文档、解析、检索、问答并核对原文依据，支持多团队数据与权限隔离。
 
-当前进度：身份隔离、可靠任务、上传与删除闭环、解析检索、本人持久会话、流式问答与 Compose 持久化/重启验收已落地并通过自动化测试。现已接入本地 Ollama bge-m3、Garage S3 兼容存储与 DeepSeek flash；固定题集尚未完成。
+当前进度：身份隔离、可靠任务、上传与删除闭环、解析检索、本人持久会话、流式问答与 Compose 持久化/重启验收已落地并通过自动化测试。现已接入本地 Ollama bge-m3、Garage S3 兼容存储与 DeepSeek flash，并完成固定 60 题质量评测与 5 并发延迟验收。
 
 ## 目录结构
 
@@ -93,6 +93,9 @@ KP_BOOTSTRAP_PASSWORD='强密码' docker compose exec -e KP_BOOTSTRAP_PASSWORD a
 
 部署、数据持久化和服务重启的可重复验收步骤见 [Compose 验收记录](docs/operations/ACCEPTANCE-RUNBOOK.md)。
 
+固定 60 题质量与并发结果见 [质量验收记录](docs/operations/V1-QUALITY-ACCEPTANCE.md)，
+评测入口与盲审步骤见 [`evaluation/README.md`](evaluation/README.md)。
+
 ## 已实现的能力
 
 - 上传 PDF、DOCX、TXT、Markdown，文件写入本地对象存储，处理任务入队。
@@ -109,7 +112,8 @@ GitHub Actions 在每次推送及拉取请求执行后端静态检查、全量�
 ## 未完成
 
 - 每日异地备份与恢复演练暂缓。
-- 中文分词、混合检索与重排尚未接入；当前为向量检索基线。
+- 重排尚未接入；当前基线为向量召回与中英文词项召回的混合检索。
+- 固定题集的人工盲审尚未完成，自动结构检查结果不能替代人工结论。
 - 本地开发已启用生成与嵌入模型的真实适配器；自动化测试仍使用确定性替身。
 
 ## 界面设计指导
