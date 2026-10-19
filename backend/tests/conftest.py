@@ -9,6 +9,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+# 自动化测试默认使用确定性替身；只有显式提供真实模型地址时才做集成验证。
+os.environ.setdefault("KP_STORAGE_BACKEND", "local")
+os.environ.setdefault("KP_EMBEDDING_BASE_URL", "")
+os.environ.setdefault("KP_ANSWER_BASE_URL", "")
+os.environ.setdefault("KP_ANSWER_API_KEY", "")
+
 from app.db import configure_engine
 
 TEST_DATABASE_URL = os.environ.get(
@@ -26,9 +32,19 @@ AppSession = sessionmaker(bind=app_engine, autoflush=False, expire_on_commit=Fal
 
 @pytest.fixture(scope="session", autouse=True)
 def _migrate() -> None:
-    with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
+    # 测试库由专用管理员重置。扩展必须与 schema 一并由管理员创建，
+    # 业务迁移账号只负责建表，不持有系统级 CREATE EXTENSION 权限。
+    admin_url = os.environ.get("KP_TEST_ADMIN_DATABASE_URL", TEST_DATABASE_URL)
+    admin_engine = create_engine(admin_url, future=True)
+    try:
+        with admin_engine.begin() as admin_conn:
+            admin_conn.execute(text("DROP SCHEMA public CASCADE"))
+            admin_conn.execute(text("CREATE SCHEMA public AUTHORIZATION kp_migrator"))
+            admin_conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            admin_conn.execute(text("GRANT USAGE, CREATE ON SCHEMA public TO kp_migrator"))
+    finally:
+        admin_engine.dispose()
+
     from alembic.config import Config
 
     from alembic import command

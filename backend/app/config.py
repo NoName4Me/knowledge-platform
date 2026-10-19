@@ -28,7 +28,13 @@ class Settings(BaseSettings):
     # 未登录时的预登录 CSRF 令牌有效期。
     csrf_prelogin_seconds: int = 30 * 60
 
+    storage_backend: str = "local"
     storage_root: str = "./data/documents"
+    s3_endpoint_url: str = ""
+    s3_bucket: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_region: str = "garage"
     max_upload_bytes: int = 20 * 1024 * 1024
     # 每团队原始文件总容量与文档数量上限，和单文件限制分开。
     team_max_bytes: int = 5 * 1024 * 1024 * 1024
@@ -36,11 +42,11 @@ class Settings(BaseSettings):
 
     # 为空时使用确定性替身，仅供开发与自动化测试。
     embedding_base_url: str = ""
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_model: str = "bge-m3-local"
     embedding_api_key: str = ""
 
     retrieval_top_k: int = 6
-    answer_model: str = "deepseek-chat"
+    answer_model: str = "deepseek-flash"
     answer_base_url: str = ""
     answer_api_key: str = ""
     # 同步问答请求中途崩溃时，遗留 answering 轮次超过此窗口后收敛为 interrupted。

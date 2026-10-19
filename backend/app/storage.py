@@ -4,6 +4,8 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 
+import boto3
+
 from app.config import get_settings
 
 settings = get_settings()
@@ -47,11 +49,56 @@ class LocalObjectStore:
         self._path(key).unlink(missing_ok=True)
 
 
+class S3ObjectStore:
+    """S3 兼容对象存储；按需初始化客户端，避免配置错误影响其他模块。"""
+
+    def __init__(
+        self,
+        endpoint_url: str,
+        bucket: str,
+        access_key: str,
+        secret_key: str,
+        region: str = "garage",
+    ) -> None:
+        if not endpoint_url or not bucket or not access_key or not secret_key:
+            raise ValueError("S3 对象存储配置不完整")
+        self.bucket = bucket
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=region,
+        )
+
+    def put(self, key: str, data: bytes) -> None:
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+
+    def get(self, key: str) -> bytes:
+        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        data: bytes = response["Body"].read()
+        return data
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=key)
+
+
 _store: ObjectStore | None = None
 
 
 def get_object_store() -> ObjectStore:
     global _store
     if _store is None:
-        _store = LocalObjectStore(settings.storage_root)
+        if settings.storage_backend == "s3":
+            _store = S3ObjectStore(
+                endpoint_url=settings.s3_endpoint_url,
+                bucket=settings.s3_bucket,
+                access_key=settings.s3_access_key,
+                secret_key=settings.s3_secret_key,
+                region=settings.s3_region,
+            )
+        elif settings.storage_backend == "local":
+            _store = LocalObjectStore(settings.storage_root)
+        else:
+            raise ValueError(f"不支持的对象存储类型：{settings.storage_backend}")
     return _store

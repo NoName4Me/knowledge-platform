@@ -2,7 +2,7 @@
 
 面向通用文档场景的团队知识工作台。V1 目标：上传文档、解析、检索、问答并核对原文依据，支持多团队数据与权限隔离。
 
-当前进度：身份隔离、可靠任务、上传与删除闭环、解析检索、本人持久会话及 Compose 持久化/重启验收已落地并通过自动化测试，模型与存储仍使用开发替身。真实依赖质量、流式问答和固定题集尚未完成。
+当前进度：身份隔离、可靠任务、上传与删除闭环、解析检索、本人持久会话及 Compose 持久化/重启验收已落地并通过自动化测试。现已接入本地 Ollama bge-m3、Garage S3 兼容存储与 DeepSeek flash；流式问答和固定题集尚未完成。
 
 ## 目录结构
 
@@ -13,15 +13,44 @@ frontend/  React + TypeScript 前端
 
 ## 本地开发
 
-后端（需要一个可用的 PostgreSQL + pgvector）：
+后端（需要 PostgreSQL 17 + pgvector）：
 
 ```bash
+# 每个项目可共用同一个 PostgreSQL 实例，但使用独立数据库和账号。
+# 首次建库由本机数据库管理员完成：
+createdb -O kp_migrator kplatform_dev
+psql -d kplatform_dev -c 'CREATE EXTENSION vector'
+
 cd backend
 uv venv --python 3.12 .venv
 uv pip install -e ".[dev]"
-KP_DATABASE_URL="postgresql+psycopg://kp:kp@localhost:55432/kp_test" .venv/bin/python -m alembic upgrade head
-KP_DATABASE_URL="postgresql+psycopg://kp:kp@localhost:55432/kp_test" .venv/bin/python -m uvicorn app.main:app --port 8000
+cp ../.env.example .env  # 填数据库、模型与 S3 配置
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m uvicorn app.main:app --port 8000
 ```
+
+后台 worker（另开一个终端）：
+
+```bash
+cd backend
+.venv/bin/python -m app.worker
+```
+
+本地依赖服务使用 Homebrew 单实例：
+
+```bash
+brew services start postgresql@17
+brew services start garage
+# Ollama 从桌面应用启动，或运行：
+/Applications/Ollama.app/Contents/Resources/ollama serve
+```
+
+PostgreSQL 实例由多个项目共用，但本项目和测试分别使用独立数据库及账号。初始管理员可用
+`backend/.venv/bin/python -m app.cli` 创建。真实配置写入 `backend/.env`，该文件不会提交。
+如果 Ollama 下载 bge-m3 被本机代理的 fake-IP 拦住，可从
+[`CompendiumLabs/bge-m3-gguf`](https://huggingface.co/CompendiumLabs/bge-m3-gguf) 下载
+`bge-m3-f16.gguf`，以 `FROM <本地 gguf 路径>` 作为 Modelfile 执行
+`ollama create bge-m3-local -f Modelfile`；该文件为 MIT 许可，已验证输出 1024 维向量。
 
 前端：
 
@@ -39,7 +68,9 @@ npm run dev
 cd backend
 .venv/bin/ruff check .
 .venv/bin/mypy app
-KP_TEST_DATABASE_URL="postgresql+psycopg://kp:kp@localhost:55432/kp_test" .venv/bin/python -m pytest
+KP_TEST_DATABASE_URL="postgresql+psycopg://kp_migrator:Aa123456@127.0.0.1:5432/kplatform_test" \
+KP_TEST_ADMIN_DATABASE_URL="postgresql+psycopg://liuhongmei:Aa123456@127.0.0.1:5432/kplatform_test" \
+KP_RLS_ROLE=kp_app KP_STORAGE_BACKEND=local .venv/bin/python -m pytest
 
 cd ../frontend
 npm run lint
@@ -79,7 +110,7 @@ KP_BOOTSTRAP_PASSWORD='强密码' docker compose exec -e KP_BOOTSTRAP_PASSWORD a
 - 流式问答与断流续读尚未完成；当前问答接口为同步 JSON。频繁打断的长问题可依靠已落库的进行中状态等待续读接口。
 - 每日异地备份与恢复演练暂缓。
 - 中文分词、混合检索与重排尚未接入；当前为向量检索基线。
-- 生成与嵌入模型的真实接入尚未配置，现用确定性替身运行。
+- 本地开发已启用生成与嵌入模型的真实适配器；自动化测试仍使用确定性替身。
 
 ## 界面设计指导
 
