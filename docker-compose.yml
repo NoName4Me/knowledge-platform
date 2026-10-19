@@ -1,0 +1,45 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${KP_DB_USER:-kp}
+      POSTGRES_PASSWORD: ${KP_DB_PASSWORD:-kp}
+      POSTGRES_DB: ${KP_DB_NAME:-kp}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KP_DB_USER:-kp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    environment:
+      KP_DATABASE_URL: postgresql+psycopg://${KP_DB_USER:-kp}:${KP_DB_PASSWORD:-kp}@db:5432/${KP_DB_NAME:-kp}
+      KP_ENVIRONMENT: ${KP_ENVIRONMENT:-production}
+      KP_SECRET_KEY: ${KP_SECRET_KEY:?KP_SECRET_KEY is required}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "python -m alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    depends_on:
+      - api
+    ports:
+      - "${KP_HTTP_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  db-data:

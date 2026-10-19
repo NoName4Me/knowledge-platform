@@ -1,0 +1,27 @@
+:root {
+  --bg: #ffffff;
+  --surface: #f4f4f4;
+  --surface-strong: #e8e8e8;
+  --ink: #111111;
+  --muted: #6b6b6b;
+  --accent: #1a4be0;
+  --accent-ink: #ffffff;
+  --danger: #c02626;
+  --line: #d8d8d8;
+
+  --step-small: clamp(0.8125rem, 0.79rem + 0.1vw, 0.875rem);
+  --step-body: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
+  --step-lead: clamp(1.25rem, 1.1rem + 0.7vw, 1.625rem);
+  --step-head: clamp(2rem, 1.2rem + 3.4vw, 4.25rem);
+  --step-display: clamp(3.25rem, 1rem + 9vw, 8.5rem);
+
+  --font-display: "Big Shoulders", "Public Sans", system-ui, sans-serif;
+  --font-text: "Public Sans", system-ui, -apple-system, sans-serif;
+
+  --radius: 14px;
+  --radius-sm: 8px;
+  --margin: 28px;
+  --gap-section: clamp(80px, 12vw, 180px);
+
+  --measure: 68ch;
+}

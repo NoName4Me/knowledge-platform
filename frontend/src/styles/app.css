@@ -1,0 +1,231 @@
+@import "./global.css";
+
+.boot {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+}
+
+.boot__mark {
+  font-size: 24px;
+}
+
+.login {
+  min-height: 100svh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding: var(--margin);
+}
+
+.login__bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.login__mark {
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+
+.login__statement {
+  align-self: center;
+  max-width: 1100px;
+  animation: rise-in 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.login__form {
+  animation: rise-in 420ms cubic-bezier(0.2, 0.7, 0.2, 1) 90ms both;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.login__sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.12em 0.22em;
+  font-size: var(--step-display);
+  line-height: 0.92;
+}
+
+.login__strip {
+  flex: 1 1 340px;
+  min-width: 240px;
+  display: block;
+}
+
+.login__support {
+  margin-top: 28px;
+  max-width: 46ch;
+  font-size: var(--step-lead);
+  color: var(--muted);
+}
+
+.login__form {
+  display: grid;
+  gap: 16px;
+  max-width: 380px;
+  padding-bottom: 24px;
+}
+
+.fragment {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--accent);
+  text-align: left;
+}
+
+.fragment__source {
+  font-size: var(--step-small);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.fragment__quote {
+  font-size: var(--step-body);
+  line-height: 1.45;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+.fragment__meta {
+  font-size: var(--step-small);
+  color: var(--accent);
+}
+
+.workspace {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px var(--margin);
+  background: var(--surface);
+}
+
+.workspace__mark {
+  font-size: 20px;
+}
+
+.workspace__identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: var(--step-small);
+  color: var(--muted);
+}
+
+.workspace__logout {
+  min-height: 38px;
+  padding: 0 16px;
+}
+
+.workspace__body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: var(--margin);
+  padding: var(--margin);
+  align-items: start;
+}
+
+.workspace__teams h2 {
+  margin-bottom: 10px;
+}
+
+.workspace__teams ul,
+.kb-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.team-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  transition: background-color 160ms ease;
+}
+
+.team-item:hover {
+  background: var(--surface);
+}
+
+.team-item--active {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.team-item__name {
+  font-weight: 600;
+}
+
+.team-item__role {
+  font-size: var(--step-small);
+  color: var(--muted);
+}
+
+.workspace__title {
+  font-size: var(--step-head);
+  margin-bottom: 10px;
+}
+
+.workspace__note {
+  color: var(--muted);
+  max-width: var(--measure);
+}
+
+.workspace__section-title {
+  font-size: 20px;
+  margin: 48px 0 12px;
+}
+
+.kb-list__item {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  max-width: 520px;
+}
+
+@media (max-width: 760px) {
+  .workspace__body {
+    grid-template-columns: 1fr;
+  }
+
+  .login__form {
+    max-width: none;
+  }
+}
