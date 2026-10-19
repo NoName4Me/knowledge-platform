@@ -13,13 +13,13 @@ frontend/  React + TypeScript 前端
 
 ## 本地开发
 
-后端（需要 PostgreSQL 17 + pgvector）：
+后端（基础服务由本机 `~/jonge/infra` 统一提供）：
 
 ```bash
-# 每个项目可共用同一个 PostgreSQL 实例，但使用独立数据库和账号。
-# 首次建库由本机数据库管理员完成：
-createdb -O kp_migrator kplatform_dev
-psql -d kplatform_dev -c 'CREATE EXTENSION vector'
+# 首次在 infra 目录启动并创建项目资源：
+cd ~/jonge/infra
+./scripts/init.sh
+./scripts/create-project.sh kplatform --pg-prefix kp --rls
 
 cd backend
 uv venv --python 3.12 .venv
@@ -36,16 +36,14 @@ cd backend
 .venv/bin/python -m app.worker
 ```
 
-本地依赖服务使用 Homebrew 单实例：
+基础服务由 OrbStack 统一托管，Ollama 保留本机应用：
 
 ```bash
-brew services start postgresql@17
-brew services start garage
-# Ollama 从桌面应用启动，或运行：
-/Applications/Ollama.app/Contents/Resources/ollama serve
+cd ~/jonge/infra && docker compose up -d
 ```
 
-PostgreSQL 实例由多个项目共用，但本项目和测试分别使用独立数据库及账号。初始管理员可用
+PostgreSQL、MySQL、Redis 和 Garage 由本地基础设施 compose 管理；本项目和其他项目共享实例，
+但各自使用独立数据库、账号与 Garage 桶。初始管理员可用
 `backend/.venv/bin/python -m app.cli` 创建。真实配置写入 `backend/.env`，该文件不会提交。
 如果 Ollama 下载 bge-m3 被本机代理的 fake-IP 拦住，可从
 [`CompendiumLabs/bge-m3-gguf`](https://huggingface.co/CompendiumLabs/bge-m3-gguf) 下载
@@ -69,7 +67,7 @@ cd backend
 .venv/bin/ruff check .
 .venv/bin/mypy app
 KP_TEST_DATABASE_URL="postgresql+psycopg://kp_migrator:Aa123456@127.0.0.1:5432/kplatform_test" \
-KP_TEST_ADMIN_DATABASE_URL="postgresql+psycopg://liuhongmei:Aa123456@127.0.0.1:5432/kplatform_test" \
+KP_TEST_ADMIN_DATABASE_URL="postgresql+psycopg://postgres:Aa123456@127.0.0.1:5432/kplatform_test" \
 KP_RLS_ROLE=kp_app KP_STORAGE_BACKEND=local .venv/bin/python -m pytest
 
 cd ../frontend
