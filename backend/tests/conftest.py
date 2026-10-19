@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.db import configure_engine
+
 TEST_DATABASE_URL = os.environ.get(
     "KP_TEST_DATABASE_URL", "postgresql+psycopg://kp:kp@localhost:5432/kp_test"
 )
@@ -18,6 +20,7 @@ TestSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False,
 
 # 应用请求必须走受限角色，否则表所有者会绕过行级安全，测试就失去意义。
 app_engine = create_engine(TEST_DATABASE_URL, future=True)
+configure_engine(app_engine)
 AppSession = sessionmaker(bind=app_engine, autoflush=False, expire_on_commit=False, future=True)
 
 
@@ -57,7 +60,6 @@ def client(session: Session) -> Iterator[TestClient]:
 
     db.engine = app_engine
     db.SessionLocal = AppSession
-    db.configure_engine(app_engine)
     with TestClient(app) as c:
         _install_csrf(c)
         yield c

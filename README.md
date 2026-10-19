@@ -2,7 +2,7 @@
 
 面向通用文档场景的团队知识工作台。V1 目标：上传文档、解析、检索、问答并核对原文依据，支持多团队数据与权限隔离。
 
-当前进度：身份隔离、可靠任务、上传与删除闭环、解析检索和本人持久会话已落地并通过自动化测试，模型与存储仍使用开发替身。真实依赖质量、流式问答、固定题集和 Mac mini 重启验收尚未完成。
+当前进度：身份隔离、可靠任务、上传与删除闭环、解析检索、本人持久会话及 Compose 持久化/重启验收已落地并通过自动化测试，模型与存储仍使用开发替身。真实依赖质量、流式问答和固定题集尚未完成。
 
 ## 目录结构
 
@@ -53,7 +53,9 @@ npm run build
 ```bash
 cp .env.example .env   # 填写 KP_SECRET_KEY 与数据库密码
 docker compose up -d --build
-docker compose exec api python -m app.cli --email you@example.com --name 你的名字 --team 团队名 --password '强密码'
+KP_BOOTSTRAP_PASSWORD='强密码' docker compose exec -e KP_BOOTSTRAP_PASSWORD api \
+  python -m app.cli --email you@example.com --name 你的名字 --team 团队名 \
+  --password-env KP_BOOTSTRAP_PASSWORD
 ```
 
 访问 `http://<主机>:${KP_HTTP_PORT:-8080}`。数据保存在命名卷 `db-data`，容器重建后仍保留。

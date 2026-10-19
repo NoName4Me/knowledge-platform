@@ -17,12 +17,15 @@
 5. 创建会话并提问，确认结果状态、引用数量与引用摘录均非空。
 6. 运行 `docker compose restart api worker web`，等待健康。
 7. 重新登录，确认资料仍为 `ready`，会话、轮次和引用仍可读取。
-8. 检查 `docker compose logs api worker web` 无迁移失败、重复任务或 CSRF/RLS 异常。
+8. 重建 API 容器（`docker compose up -d --force-recreate api`），确认 Web 的 `/api/health` 仍返回 `200`，Nginx 不会继续使用旧容器地址。
+9. 检查 `docker compose logs api worker web` 无迁移失败、重复任务或 CSRF/RLS 异常。
 
 ## 判断标准
 
 - 重启前后记录的资料 ID、会话 ID 与轮次 ID 必须一致；不能只凭页面“看起来还在”判定通过。
 - 数据使用命名卷 `db-data` 和 `doc-storage`；仅重建容器不能删除卷。
+- API/worker 每次取用数据库连接都会切换到受限运行角色；仅检查表所有者启动成功不足以证明 RLS 生效。
+- Nginx 通过 Docker DNS 在请求时解析 API 服务名；只重启 API 也应保持 `/api` 可达。
 - 出现迁移失败、对象缺失或会话被清空即验收失败。保留失败日志与当时版本号。
 
 ## 已知边界

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from tests.conftest import add_member, make_team, make_user
 
@@ -209,3 +212,144 @@ def test_stale_answering_turn_is_interrupted_and_retryable(client, session):
         json={"client_request_id": str(uuid.uuid4()), "question": "重新提问"},
     )
     assert response.status_code == 200
+
+
+def test_database_rejects_turn_sequence_race(client, session):
+    from app.models import Conversation, Turn
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    stored = session.get(Conversation, conversation["id"])
+    assert stored is not None
+    session.add(
+        Turn(
+            team_id=team.id,
+            knowledge_base_id=uuid.UUID(kb["id"]),
+            conversation_id=stored.id,
+            created_by_id=owner.id,
+            client_request_id=uuid.uuid4(),
+            seq=1,
+            question="第一个问题",
+            status="answering",
+        )
+    )
+    session.commit()
+    session.add(
+        Turn(
+            team_id=team.id,
+            knowledge_base_id=uuid.UUID(kb["id"]),
+            conversation_id=stored.id,
+            created_by_id=owner.id,
+            client_request_id=uuid.uuid4(),
+            seq=2,
+            question="并发问题",
+            status="answering",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
+def test_same_request_id_concurrent_calls_create_one_turn(client, session):
+    from app.conversations import ConversationNotFound, answer_turn, get_owned_conversation
+    from app.db import apply_context
+    from app.models import TeamMembership, Turn, User
+    from tests.conftest import AppSession
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    request_id = uuid.uuid4()
+    user = session.get(User, owner.id)
+    membership = session.scalars(
+        select(TeamMembership).where(
+            TeamMembership.team_id == team.id,
+            TeamMembership.user_id == owner.id,
+        )
+    ).one()
+    assert user is not None
+
+    def ask() -> uuid.UUID:
+        from app.auth import TeamContext
+
+        work = AppSession()
+        try:
+            context = TeamContext(user=user, team=team, role=membership.role)
+            apply_context(work, user_id=user.id, team_id=team.id)
+            get_owned_conversation(
+                work,
+                context,
+                uuid.UUID(kb["id"]),
+                uuid.UUID(conversation["id"]),
+            )
+            work.commit()
+            apply_context(work, user_id=user.id, team_id=team.id)
+            return answer_turn(
+                work,
+                context,
+                uuid.UUID(kb["id"]),
+                uuid.UUID(conversation["id"]),
+                request_id,
+                "年假有几天？",
+            ).id
+        except ConversationNotFound:
+            raise
+        finally:
+            work.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ids = list(pool.map(lambda _: ask(), range(2)))
+    assert len(set(ids)) == 1
+    session.expire_all()
+    turns = session.scalars(
+        select(Turn).where(Turn.conversation_id == uuid.UUID(conversation["id"]))
+    ).all()
+    assert len(turns) == 1
+
+
+def test_different_requests_concurrent_calls_publish_one_active_turn(client, session):
+    from app.auth import TeamContext
+    from app.conversations import ConversationBusy, answer_turn
+    from app.db import apply_context
+    from app.models import TeamMembership, Turn, User
+    from tests.conftest import AppSession
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    user = session.get(User, owner.id)
+    membership = session.scalars(
+        select(TeamMembership).where(
+            TeamMembership.team_id == team.id,
+            TeamMembership.user_id == owner.id,
+        )
+    ).one()
+    assert user is not None
+    context = TeamContext(user=user, team=team, role=membership.role)
+
+    def ask(request_id: uuid.UUID) -> str:
+        work = AppSession()
+        try:
+            apply_context(work, user_id=user.id, team_id=team.id)
+            try:
+                answer_turn(
+                    work,
+                    context,
+                    uuid.UUID(kb["id"]),
+                    uuid.UUID(conversation["id"]),
+                    request_id,
+                    "年假有几天？",
+                )
+                return "ok"
+            except ConversationBusy:
+                return "busy"
+        finally:
+            work.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(ask, [uuid.uuid4(), uuid.uuid4()]))
+    assert sorted(results) == ["busy", "ok"]
+    session.expire_all()
+    turns = session.scalars(
+        select(Turn).where(Turn.conversation_id == uuid.UUID(conversation["id"]))
+    ).all()
+    assert len(turns) == 1

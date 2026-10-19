@@ -37,15 +37,20 @@ def get_owned_conversation(
     context: TeamContext,
     knowledge_base_id: uuid.UUID,
     conversation_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> Conversation:
-    conversation = session.scalars(
+    statement = (
         select(Conversation).where(
             Conversation.id == conversation_id,
             Conversation.team_id == context.team.id,
             Conversation.knowledge_base_id == knowledge_base_id,
             Conversation.created_by_id == context.user.id,
         )
-    ).one_or_none()
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    conversation = session.scalars(statement).one_or_none()
     if conversation is None:
         raise ConversationNotFound
     return conversation
@@ -121,7 +126,14 @@ def answer_turn(
     client_request_id: uuid.UUID,
     question: str,
 ) -> TurnOutData:
-    conversation = get_owned_conversation(session, context, knowledge_base_id, conversation_id)
+    # 以会话行作为提交闸门，串行裁决重复请求、进行中状态与轮次序号。
+    conversation = get_owned_conversation(
+        session,
+        context,
+        knowledge_base_id,
+        conversation_id,
+        for_update=True,
+    )
     existing = session.scalars(
         select(Turn).where(
             Turn.conversation_id == conversation.id,
@@ -130,6 +142,7 @@ def answer_turn(
     ).one_or_none()
     if existing is not None:
         if existing.question != question:
+            session.rollback()
             raise ValueError("同一请求标识对应不同问题")
         session.commit()
         _restore_rls_context(session, context)
@@ -142,6 +155,7 @@ def answer_turn(
         select(Turn).where(Turn.conversation_id == conversation.id, Turn.status == "answering")
     ).first()
     if active is not None:
+        session.rollback()
         raise ConversationBusy
 
     seq = (

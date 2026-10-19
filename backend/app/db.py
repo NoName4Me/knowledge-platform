@@ -11,8 +11,12 @@ from app.config import get_settings
 settings = get_settings()
 
 
-def _set_runtime_role(dbapi_connection: Any, _record: Any) -> None:
-    """连接建立后切换到受限角色，使行级安全对应用生效。"""
+def _set_runtime_role(dbapi_connection: Any, _record: Any, _proxy: Any = None) -> None:
+    """每次取用连接时切换受限角色，使行级安全对应用生效。
+
+    连接归还池时会重置会话状态，所以只在物理 connect 事件设置角色并不够；
+    复用连接可能重新回到迁移账号并绕过 RLS。
+    """
     role = settings.rls_role
     if not role:
         return
@@ -22,7 +26,12 @@ def _set_runtime_role(dbapi_connection: Any, _record: Any) -> None:
 
 def configure_engine(target_engine: Engine) -> None:
     """为引擎挂上受限角色切换；应用与测试共用同一套连接准备逻辑。"""
-    event.listen(target_engine, "connect", _set_runtime_role)
+    # checkout 同样覆盖首次取用与池中复用；连接归还池时事件会失效，
+    # 所以以引擎标记保证重复配置不会叠加监听器。
+    if getattr(target_engine, "_kp_runtime_role_configured", False):
+        return
+    event.listen(target_engine, "checkout", _set_runtime_role)
+    target_engine._kp_runtime_role_configured = True  # type: ignore[attr-defined]
 
 
 engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)

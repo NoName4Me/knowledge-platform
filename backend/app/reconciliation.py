@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.db import apply_context
@@ -31,27 +31,40 @@ def reconcile_uploads_once(session: Session, *, limit: int = 100) -> Reconciliat
     只接受超过上传窗口的记录；存储不可用时不改状态，避免把临时故障误判为数据丢失。
     """
     cutoff = datetime.now(UTC) - STALE_UPLOAD_AGE
-    candidates = session.scalars(
-        select(Document)
-        .where(Document.status == "uploading", Document.updated_at < cutoff)
-        .order_by(Document.created_at)
-        .limit(limit)
+    # 对账需要跨团队发现候选记录，但运行角色受 RLS 限制。数据库函数只返回
+    # 候选 ID 与团队 ID，随后逐条恢复团队上下文，不能借此读取正文或元数据。
+    candidates = session.execute(
+        text(
+            """
+            select document_id, team_id
+            from app_reconcile_upload_candidates(:cutoff, :limit)
+            """
+        ),
+        {"cutoff": cutoff, "limit": limit},
     ).all()
     result = ReconciliationResult(scanned=len(candidates))
     store = get_object_store()
 
     for candidate in candidates:
         apply_context(session, team_id=candidate.team_id)
+        document = session.get(Document, candidate.document_id)
+        if (
+            document is None
+            or document.status != "uploading"
+            or document.updated_at >= cutoff
+        ):
+            session.rollback()
+            continue
         unique = session.scalars(
             select(ProcessingTask).where(
-                ProcessingTask.document_id == candidate.id,
+                ProcessingTask.document_id == document.id,
             )
         ).one_or_none()
         try:
-            data = store.get(candidate.storage_key)
+            data = store.get(document.storage_key)
         except FileNotFoundError:
-            candidate.status = "failed"
-            candidate.failure_reason = "上传未完成，原始文件不存在"
+            document.status = "failed"
+            document.failure_reason = "上传未完成，原始文件不存在"
             session.commit()
             result.failed += 1
             continue
@@ -64,13 +77,13 @@ def reconcile_uploads_once(session: Session, *, limit: int = 100) -> Reconciliat
             session.rollback()
             continue
 
-        if len(data) != candidate.size_bytes:
+        if len(data) != document.size_bytes:
             result.unavailable += 1
             session.rollback()
             continue
 
         if unique is None:
-            mark_uploaded(session, candidate)
+            mark_uploaded(session, document)
             session.commit()
             result.queued += 1
         else:

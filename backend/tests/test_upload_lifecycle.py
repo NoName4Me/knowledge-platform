@@ -180,3 +180,69 @@ def test_reconciliation_queues_stale_upload_without_duplicate_task(client, sessi
     # 第二次对账不重复创建任务。
     result = reconcile_uploads_once(session)
     assert result.queued == 0
+
+
+def test_reconciliation_runs_as_restricted_role_across_teams(client, session):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import text
+
+    from app.models import Document, ProcessingTask
+    from app.reconciliation import reconcile_uploads_once
+    from app.storage import get_object_store
+    from tests.conftest import AppSession
+
+    stale_ids: set[uuid.UUID] = set()
+    for index in range(2):
+        user = make_user(session, f"reconcile-{index}@example.com")
+        team = make_team(session, f"对账团队{index}")
+        add_member(session, team, user, role="admin")
+        client.post(
+            "/api/auth/login",
+            json={"email": user.email, "password": "password123"},
+        )
+        kb = client.post(
+            f"/api/teams/{team.id}/knowledge-bases",
+            json={"name": f"资料库{index}"},
+        ).json()
+        created = _upload(
+            client,
+            team.id,
+            kb["id"],
+            uuid.uuid4(),
+            content=f"对账内容{index}".encode(),
+        ).json()
+        session.expire_all()
+        document = session.get(Document, created["id"])
+        assert document is not None
+        document.status = "uploading"
+        document.updated_at = datetime.now(UTC) - timedelta(minutes=31)
+        task = session.scalars(
+            select(ProcessingTask).where(ProcessingTask.document_id == document.id)
+        ).one()
+        session.delete(task)
+        session.commit()
+        get_object_store().put(document.storage_key, f"对账内容{index}".encode())
+        stale_ids.add(document.id)
+
+    restricted = AppSession()
+    try:
+        assert restricted.execute(text("select current_user")).scalar_one() == "kp_app"
+        assert (
+            restricted.execute(text("select count(*) from documents")).scalar_one() == 0
+        )
+        restricted.commit()
+        result = reconcile_uploads_once(restricted, limit=1)
+        assert result.scanned == 1
+        assert result.queued == 1
+        result = reconcile_uploads_once(restricted, limit=10)
+        assert result.scanned == 1
+        assert result.queued == 1
+    finally:
+        restricted.close()
+
+    session.expire_all()
+    assert {document.id for document in session.scalars(select(Document)).all()} == stale_ids
+    assert session.scalars(
+        select(ProcessingTask).where(ProcessingTask.document_id.in_(stale_ids))
+    ).all()
