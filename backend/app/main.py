@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.csrf import CsrfMiddleware
 from app.observability import RequestLogMiddleware
-from app.routers import ask, auth, conversations, documents, teams
+from app.routers import ask, auth, conversations, documents, invitations, teams
 
 settings = get_settings()
 
@@ -23,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(invitations.router)
 app.include_router(teams.router)
 app.include_router(documents.router)
 app.include_router(ask.router)

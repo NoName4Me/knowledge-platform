@@ -41,6 +41,49 @@ class MemberOut(BaseModel):
     role: str
 
 
+class InvitationCreate(BaseModel):
+    email: EmailStr
+    role: str = Field(default="member", pattern="^(admin|member)$")
+
+
+class InvitationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    role: str
+    expires_at: datetime
+    accepted_at: datetime | None
+    created_at: datetime
+
+
+class InvitationCreatedOut(BaseModel):
+    invitation: InvitationOut
+    # 令牌只在创建响应中返回一次，服务端只保存哈希。
+    token: str
+
+
+class InvitationPreviewOut(BaseModel):
+    status: str
+    team_name: str | None
+    email_masked: str | None
+
+
+class InvitationAcceptRequest(BaseModel):
+    token: str = Field(min_length=8, max_length=200)
+
+
+class InvitationPreviewRequest(BaseModel):
+    token: str = Field(min_length=8, max_length=200)
+
+
+class RegisterWithInvitationRequest(BaseModel):
+    token: str = Field(min_length=8, max_length=200)
+    email: EmailStr
+    display_name: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+
+
 class DocumentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

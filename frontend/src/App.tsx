@@ -1,16 +1,30 @@
 import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import "./styles/app.css";
 
 function Routes() {
   const { status } = useAuth();
+  const inviteToken = window.location.pathname.match(/^\/invite\/([^/]+)$/)?.[1];
 
   if (status === "loading") {
     return (
       <main className="boot">
         <span className="display boot__mark">知识工作台</span>
       </main>
+    );
+  }
+
+  if (inviteToken) {
+    return (
+      <InvitePage
+        token={decodeURIComponent(inviteToken)}
+        onDone={() => {
+          window.history.replaceState(null, "", "/");
+          window.location.reload();
+        }}
+      />
     );
   }
 

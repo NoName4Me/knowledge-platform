@@ -15,6 +15,7 @@ type AuthState = {
   session: MeResponse | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  refresh: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -53,9 +54,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus("anonymous");
   }, []);
 
+  const refresh = useCallback(async () => {
+    const data = await api.me();
+    setSession(data);
+    setStatus("authenticated");
+  }, []);
+
   const value = useMemo(
-    () => ({ status, session, login, logout }),
-    [status, session, login, logout],
+    () => ({ status, session, login, logout, refresh }),
+    [status, session, login, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

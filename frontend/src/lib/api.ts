@@ -27,6 +27,21 @@ export type TeamMember = {
   role: "admin" | "member";
 };
 
+export type TeamInvitation = {
+  id: string;
+  email: string;
+  role: "admin" | "member";
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+};
+
+export type InvitationPreview = {
+  status: "ok" | "used" | "expired" | "not_found";
+  team_name: string | null;
+  email_masked: string | null;
+};
+
 export type DocumentStatus = "uploading" | "pending" | "processing" | "ready" | "failed" | "deleted";
 
 export type DocumentItem = {
@@ -189,6 +204,32 @@ export const api = {
   listMembers: (teamId: string) => request<TeamMember[]>(`/api/teams/${teamId}/members`),
   removeMember: (teamId: string, userId: string) =>
     writeRequest<void>(`/api/teams/${teamId}/members/${userId}`, { method: "DELETE" }),
+  listInvitations: (teamId: string) =>
+    request<TeamInvitation[]>(`/api/teams/${teamId}/invitations`),
+  createInvitation: (teamId: string, email: string, role: "admin" | "member") =>
+    writeRequest<{ invitation: TeamInvitation; token: string }>(
+      `/api/teams/${teamId}/invitations`,
+      jsonInit(FORM_METHOD, { email, role }),
+    ),
+  revokeInvitation: (teamId: string, invitationId: string) =>
+    writeRequest<void>(`/api/teams/${teamId}/invitations/${invitationId}`, {
+      method: "DELETE",
+    }),
+  previewInvitation: (token: string) =>
+    writeRequest<InvitationPreview>(
+      "/api/invitations/preview",
+      jsonInit(FORM_METHOD, { token }),
+    ),
+  registerWithInvitation: (token: string, email: string, displayName: string, password: string) =>
+    writeRequest<MeResponse>(
+      "/api/invitations/register",
+      jsonInit(FORM_METHOD, { token, email, display_name: displayName, password }),
+    ).then((data) => {
+      setCsrfToken(data.csrf_token);
+      return data;
+    }),
+  acceptInvitation: (token: string) =>
+    writeRequest<MeResponse>("/api/invitations/accept", jsonInit(FORM_METHOD, { token })),
 
   listDocuments: (teamId: string, knowledgeBaseId: string) =>
     request<DocumentItem[]>(

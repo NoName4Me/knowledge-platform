@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { api, ApiError, type TeamMember } from "../lib/api";
+import { useEffect, useState, type FormEvent } from "react";
+import { api, ApiError, type TeamInvitation, type TeamMember } from "../lib/api";
 import { Icon } from "./Icon";
 
 type Props = {
@@ -13,15 +13,22 @@ const message = (err: unknown, fallback: string) =>
 
 export function MemberDialog({ teamId, onClose, onError }: Props) {
   const [members, setMembers] = useState<TeamMember[]>([]);
+  const [invitations, setInvitations] = useState<TeamInvitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "member">("member");
+  const [inviting, setInviting] = useState(false);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listMembers(teamId)
-      .then((items) => {
-        if (!cancelled) setMembers(items);
+    Promise.all([api.listMembers(teamId), api.listInvitations(teamId)])
+      .then(([memberItems, invitationItems]) => {
+        if (!cancelled) {
+          setMembers(memberItems);
+          setInvitations(invitationItems.filter((item) => !item.accepted_at));
+        }
       })
       .catch((err) => {
         if (!cancelled) onError(message(err, "加载成员失败"));
@@ -33,6 +40,40 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
       cancelled = true;
     };
   }, [teamId, onError]);
+
+  async function invite(event: FormEvent) {
+    event.preventDefault();
+    if (!email.trim() || inviting) return;
+    setInviting(true);
+    try {
+      const result = await api.createInvitation(teamId, email.trim(), role);
+      setInvitations((items) => [result.invitation, ...items]);
+      setInviteLink(`${window.location.origin}/invite/${result.token}`);
+      setEmail("");
+    } catch (err) {
+      onError(message(err, "创建邀请失败"));
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function copyInviteLink() {
+    if (!inviteLink) return;
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+    } catch {
+      onError("复制失败，请手动选择链接复制");
+    }
+  }
+
+  async function revoke(invitation: TeamInvitation) {
+    try {
+      await api.revokeInvitation(teamId, invitation.id);
+      setInvitations((items) => items.filter((item) => item.id !== invitation.id));
+    } catch (err) {
+      onError(message(err, "撤销邀请失败"));
+    }
+  }
 
   async function remove(member: TeamMember) {
     if (!window.confirm(`将 ${member.display_name} 移出团队？`)) return;
@@ -71,6 +112,41 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
           </button>
         </header>
         <p className="member-dialog__note">资料由团队共享；每位成员的问答历史仅本人可见。</p>
+        <form className="invite-form" onSubmit={invite}>
+          <div className="invite-form__heading">
+            <strong>邀请成员</strong>
+            <span>生成一次性链接，72 小时内有效。</span>
+          </div>
+          <div className="invite-form__row">
+            <input
+              type="email"
+              aria-label="受邀邮箱"
+              placeholder="member@example.com"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+            <select
+              aria-label="成员角色"
+              value={role}
+              onChange={(event) => setRole(event.target.value as "admin" | "member")}
+            >
+              <option value="member">成员</option>
+              <option value="admin">管理员</option>
+            </select>
+            <button className="btn" disabled={inviting || !email.trim()}>
+              {inviting ? "生成中…" : "生成邀请"}
+            </button>
+          </div>
+          {inviteLink && (
+            <div className="invite-link" role="status">
+              <span>{inviteLink}</span>
+              <button type="button" className="btn btn--ghost" onClick={() => void copyInviteLink()}>
+                复制链接
+              </button>
+            </div>
+          )}
+        </form>
         {loading ? (
           <p className="panel__empty" role="status">正在加载成员…</p>
         ) : (
@@ -95,6 +171,27 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
               </li>
             ))}
           </ul>
+        )}
+        {invitations.length > 0 && (
+          <section className="pending-invites" aria-labelledby="pending-invites-title">
+            <h3 id="pending-invites-title">待接受邀请</h3>
+            <ul>
+              {invitations.map((invitation) => (
+                <li key={invitation.id}>
+                  <span>
+                    <strong>{invitation.email}</strong>
+                    <small>
+                      {invitation.role === "admin" ? "管理员" : "成员"} ·{" "}
+                      {new Date(invitation.expires_at).toLocaleDateString("zh-CN")} 到期
+                    </small>
+                  </span>
+                  <button className="btn btn--ghost member-row__remove" onClick={() => void revoke(invitation)}>
+                    撤销
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
       </section>
     </div>

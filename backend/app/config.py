@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     csrf_cookie_name: str = "kp_csrf"
     # 未登录时的预登录 CSRF 令牌有效期。
     csrf_prelogin_seconds: int = 30 * 60
+    invitation_ttl_hours: int = 72
 
     storage_backend: str = "local"
     storage_root: str = "./data/documents"
