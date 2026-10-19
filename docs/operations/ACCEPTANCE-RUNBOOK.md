@@ -14,15 +14,18 @@
 2. 访问 `/api/health`，应返回 `{"status":"ok"}`；访问 Web 根路径应返回页面。
 3. 用 `python -m app.cli --password-env KP_BOOTSTRAP_PASSWORD` 创建验收管理员和独立团队，确认命令不再被运行时 RLS 角色拒绝。
 4. 登录后创建知识库，上传一份 TXT 或 Markdown 资料，等待文档变为 `ready`。
-5. 创建会话并提问，确认结果状态、引用数量与引用摘录均非空。
-6. 运行 `docker compose restart api worker web`，等待健康。
-7. 重新登录，确认资料仍为 `ready`，会话、轮次和引用仍可读取。
-8. 重建 API 容器（`docker compose up -d --force-recreate api`），确认 Web 的 `/api/health` 仍返回 `200`，Nginx 不会继续使用旧容器地址。
-9. 检查 `docker compose logs api worker web` 无迁移失败、重复任务或 CSRF/RLS 异常。
+5. 创建会话并提问，确认页面先显示“正在检索资料并生成回答”，随后增量出现正文；完成事件后重新读取轮次，确认状态为 `completed`、引用数量和引用摘录均非空。
+6. 对同一个 `client_request_id` 再请求一次 `/turns/stream`，确认返回已有轮次且没有新增记录。生成中刷新页面，确认已生成草稿可读取；超过超时时间后应转为 `interrupted` 并允许重新提问。
+7. 运行 `docker compose restart api worker web`，等待健康。
+8. 重新登录，确认资料仍为 `ready`，会话、轮次和引用仍可读取。
+9. 重建 API 容器（`docker compose up -d --force-recreate api`），确认 Web 的 `/api/health` 仍返回 `200`，Nginx 不会继续使用旧容器地址。
+10. 检查 `docker compose logs api worker web` 无迁移失败、重复任务或 CSRF/RLS 异常。
 
 ## 判断标准
 
 - 重启前后记录的资料 ID、会话 ID 与轮次 ID 必须一致；不能只凭页面“看起来还在”判定通过。
+- SSE 响应必须包含 `text/event-stream`、`Cache-Control: no-cache` 和 `X-Accel-Buffering: no`；成功顺序为首个 `turn`、零到多个 `delta`、终态 `turn`，失败则发送 `error`。
+- 断流测试必须验证服务端草稿已持久化；客户端重新进入会话时读取该轮次，不能从头伪造流式文本。
 - 数据使用命名卷 `db-data` 和 `doc-storage`；仅重建容器不能删除卷。
 - API/worker 每次取用数据库连接都会切换到受限运行角色；仅检查表所有者启动成功不足以证明 RLS 生效。
 - Nginx 通过 Docker DNS 在请求时解析 API 服务名；只重启 API 也应保持 `/api` 可达。

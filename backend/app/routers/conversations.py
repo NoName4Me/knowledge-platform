@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -13,8 +15,10 @@ from app.conversations import (
     ConversationBusy,
     ConversationNotFound,
     answer_turn,
+    begin_turn,
     create_conversation,
     get_owned_conversation,
+    stream_answer,
     turn_data,
 )
 from app.db import apply_context, get_session
@@ -24,6 +28,7 @@ from app.schemas import (
     ConversationOut,
     TurnAskRequest,
     TurnOut,
+    TurnStreamEventOut,
 )
 
 router = APIRouter(
@@ -150,3 +155,76 @@ def ask_in_conversation(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="回答服务暂不可用") from exc
+
+
+@router.post("/conversations/{conversation_id}/turns/stream")
+def ask_in_conversation_stream(
+    team_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    payload: TurnAskRequest,
+    context: TeamContext = Depends(get_team_context),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """SSE 流式回答；先持久化占位轮次，断流后可用轮次读取接口恢复。"""
+    try:
+        get_owned_conversation(session, context, knowledge_base_id, conversation_id)
+    except ConversationNotFound as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    _close_stale_turns(session, conversation_id)
+    session.commit()
+    apply_context(session, user_id=context.user.id, team_id=context.team.id)
+    try:
+        turn, reused = begin_turn(
+            session,
+            context,
+            knowledge_base_id,
+            conversation_id,
+            payload.client_request_id,
+            payload.question.strip(),
+        )
+    except ConversationNotFound as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    except ConversationBusy as exc:
+        raise HTTPException(status_code=409, detail="当前会话已有进行中的提问") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def events() -> Iterator[str]:
+        # 长连接使用独立会话；请求级会话会在返回响应体后提前关闭。
+        from app.db import SessionLocal
+
+        with SessionLocal() as stream_session:
+            apply_context(
+                stream_session, user_id=context.user.id, team_id=context.team.id
+            )
+            try:
+                for event in stream_answer(
+                    stream_session,
+                    context,
+                    knowledge_base_id,
+                    turn.id,
+                    payload.question.strip(),
+                    reused=reused,
+                ):
+                    data = TurnStreamEventOut(
+                        type=event.type,
+                        turn=event.turn,
+                        text=event.text,
+                        error_code=event.error_code,
+                        message=event.message,
+                    )
+                    yield f"data: {data.model_dump_json()}\n\n"
+                yield "event: done\ndata: {}\n\n"
+            finally:
+                stream_session.rollback()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Request-ID": str(payload.client_request_id),
+        },
+    )

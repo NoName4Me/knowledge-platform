@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select, text
@@ -25,6 +27,25 @@ class ConversationBusy(Exception):
 
 class InvalidAnswer(Exception):
     pass
+
+
+class SourceDeleted(Exception):
+    """生成结束前来源已删除，本轮不得发布旧引用。"""
+
+
+class AccessRevoked(Exception):
+    """长连接生成期间成员关系或会话归属已失效。"""
+
+
+@dataclass
+class TurnStreamEvent:
+    """SSE 事件载荷；与前端共享同一套字段名。"""
+
+    type: str
+    turn: TurnOut | None = None
+    text: str | None = None
+    error_code: str | None = None
+    message: str | None = None
 
 
 def _restore_rls_context(session: Session, context: TeamContext) -> None:
@@ -118,14 +139,18 @@ def _validate_answer(answer: str, chunks: list[RetrievedChunk]) -> list[Retrieve
     return [chunks[value - 1] for value in sorted(references)]
 
 
-def answer_turn(
+def begin_turn(
     session: Session,
     context: TeamContext,
     knowledge_base_id: uuid.UUID,
     conversation_id: uuid.UUID,
     client_request_id: uuid.UUID,
     question: str,
-) -> TurnOutData:
+) -> tuple[Turn, bool]:
+    """占位并返回 (轮次, 是否为已存在的重复请求)。
+
+    流式路由需要在返回响应体之前完成占位提交，因此该步骤必须可独立调用。
+    """
     # 以会话行作为提交闸门，串行裁决重复请求、进行中状态与轮次序号。
     conversation = get_owned_conversation(
         session,
@@ -149,7 +174,7 @@ def answer_turn(
         refreshed = session.get(Turn, existing.id)
         if refreshed is None:
             raise ConversationNotFound
-        return turn_data(session, refreshed)
+        return refreshed, True
 
     active = session.scalars(
         select(Turn).where(Turn.conversation_id == conversation.id, Turn.status == "answering")
@@ -181,38 +206,100 @@ def answer_turn(
     turn = session.get(Turn, new_turn.id)
     if turn is None:
         raise RuntimeError("轮次创建后丢失")
+    return turn, False
 
-    try:
-        chunks = retrieve(
-            session,
-            team_id=context.team.id,
-            knowledge_base_id=knowledge_base_id,
-            question=question,
+
+def _live_documents(session: Session, chunks: list[RetrievedChunk]) -> set[uuid.UUID]:
+    """生成结束前复核来源仍然可用；已删除来源不得继续发布旧引用。"""
+    ids = {chunk.document_id for chunk in chunks}
+    if not ids:
+        return set()
+    rows = session.scalars(
+        select(Document.id).where(
+            Document.id.in_(ids),
+            Document.deleted_at.is_(None),
+            Document.status == "ready",
         )
-        if not chunks:
-            turn.status = "insufficient"
-            turn.answer = "依据不足：没有检索到能够支持回答的团队资料。"
-            turn.finished_at = datetime.now(UTC)
-            session.commit()
-            _restore_rls_context(session, context)
-            refreshed = session.get(Turn, turn.id)
-            if refreshed is None:
-                raise ConversationNotFound
-            return turn_data(session, refreshed)
-        result = get_answer_provider().answer(question, chunks)
-        used = _validate_answer(result.answer, chunks)
-    except Exception as exc:  # noqa: BLE001
-        session.rollback()
-        _restore_rls_context(session, context)
-        failed_turn = session.get(Turn, new_turn.id)
-        if failed_turn is not None:
-            failed_turn.status = "failed"
-            failed_turn.error_code = "MODEL_UNAVAILABLE"
-            failed_turn.finished_at = datetime.now(UTC)
-            session.commit()
-        raise RuntimeError("回答生成失败") from exc
+    ).all()
+    return set(rows)
 
-    turn.answer = result.answer
+
+def _ensure_publish_access(
+    session: Session,
+    context: TeamContext,
+    knowledge_base_id: uuid.UUID,
+    turn: Turn,
+) -> Conversation:
+    """最终发布前重新读取授权事实，防止长连接沿用生成开始时的身份。"""
+    membership = session.execute(
+        text(
+            """
+            select 1
+            from team_memberships
+            where team_id = :team_id and user_id = :user_id
+            """
+        ),
+        {"team_id": context.team.id, "user_id": context.user.id},
+    ).one_or_none()
+    if membership is None:
+        raise AccessRevoked
+    try:
+        return get_owned_conversation(
+            session, context, knowledge_base_id, turn.conversation_id
+        )
+    except ConversationNotFound as exc:
+        raise AccessRevoked from exc
+
+
+def _finish_insufficient(
+    session: Session, context: TeamContext, turn: Turn
+) -> TurnOutData:
+    turn.status = "insufficient"
+    turn.answer = "依据不足：没有检索到能够支持回答的团队资料。"
+    turn.answer_draft = None
+    turn.finished_at = datetime.now(UTC)
+    session.commit()
+    _restore_rls_context(session, context)
+    refreshed = session.get(Turn, turn.id)
+    if refreshed is None:
+        raise ConversationNotFound
+    return turn_data(session, refreshed)
+
+
+def _mark_failed(
+    session: Session,
+    context: TeamContext,
+    turn_id: uuid.UUID,
+    error_code: str,
+) -> None:
+    session.rollback()
+    _restore_rls_context(session, context)
+    failed = session.get(Turn, turn_id)
+    if failed is not None:
+        failed.status = "failed"
+        failed.error_code = error_code
+        failed.answer_draft = None
+        failed.finished_at = datetime.now(UTC)
+        session.commit()
+
+
+def _publish_answer(
+    session: Session,
+    context: TeamContext,
+    knowledge_base_id: uuid.UUID,
+    turn: Turn,
+    answer_text: str,
+    chunks: list[RetrievedChunk],
+) -> TurnOutData:
+    """校验引用与来源后一次性发布最终答案。"""
+    used = _validate_answer(answer_text, chunks)
+    live = _live_documents(session, used)
+    if {chunk.document_id for chunk in used} - live:
+        raise SourceDeleted
+    conversation = _ensure_publish_access(session, context, knowledge_base_id, turn)
+
+    turn.answer = answer_text
+    turn.answer_draft = None
     turn.status = "completed"
     turn.finished_at = datetime.now(UTC)
     for ordinal, chunk in enumerate(used, start=1):
@@ -230,16 +317,136 @@ def answer_turn(
             )
         )
     conversation.updated_at = datetime.now(UTC)
-    try:
-        session.commit()
-    except Exception as exc:  # noqa: BLE001
-        session.rollback()
-        raise RuntimeError("回答持久化失败") from exc
+    session.commit()
     _restore_rls_context(session, context)
     refreshed = session.get(Turn, turn.id)
     if refreshed is None:
         raise ConversationNotFound
     return turn_data(session, refreshed)
+
+
+def answer_turn(
+    session: Session,
+    context: TeamContext,
+    knowledge_base_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    client_request_id: uuid.UUID,
+    question: str,
+) -> TurnOutData:
+    turn, reused = begin_turn(
+        session, context, knowledge_base_id, conversation_id, client_request_id, question
+    )
+    if reused:
+        return turn_data(session, turn)
+
+    try:
+        chunks = retrieve(
+            session,
+            team_id=context.team.id,
+            knowledge_base_id=knowledge_base_id,
+            question=question,
+        )
+        if not chunks:
+            return _finish_insufficient(session, context, turn)
+        result = get_answer_provider().answer(question, chunks)
+    except Exception as exc:  # noqa: BLE001
+        _mark_failed(session, context, turn.id, "MODEL_UNAVAILABLE")
+        raise RuntimeError("回答生成失败") from exc
+
+    try:
+        return _publish_answer(session, context, knowledge_base_id, turn, result.answer, chunks)
+    except SourceDeleted:
+        _mark_failed(session, context, turn.id, "SOURCE_DELETED")
+        raise RuntimeError("回答来源已删除") from None
+    except AccessRevoked:
+        _mark_failed(session, context, turn.id, "ACCESS_REVOKED")
+        raise RuntimeError("回答权限已失效") from None
+    except Exception as exc:  # noqa: BLE001
+        _mark_failed(session, context, turn.id, "ANSWER_INVALID")
+        raise RuntimeError("回答持久化失败") from exc
+
+
+def stream_answer(
+    session: Session,
+    context: TeamContext,
+    knowledge_base_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    question: str,
+    *,
+    reused: bool = False,
+) -> Iterator[TurnStreamEvent]:
+    """已有占位轮次后增量生成，并把校验通过的答案一次性发布。
+
+    调用方负责创建轮次（含重复请求与进行中判定），因此这里可以安全地
+    在长连接中重新取用会话，避免请求级依赖在响应体发送前被关闭。
+    """
+    turn = session.get(Turn, turn_id)
+    if turn is None:
+        raise ConversationNotFound
+    yield TurnStreamEvent(type="turn", turn=turn_data(session, turn))
+    if reused:
+        return
+
+    try:
+        chunks = retrieve(
+            session,
+            team_id=context.team.id,
+            knowledge_base_id=knowledge_base_id,
+            question=question,
+        )
+    except Exception:  # noqa: BLE001
+        _mark_failed(session, context, turn.id, "MODEL_UNAVAILABLE")
+        yield TurnStreamEvent(type="error", error_code="MODEL_UNAVAILABLE", message="检索失败")
+        return
+
+    if not chunks:
+        result = _finish_insufficient(session, context, turn)
+        yield TurnStreamEvent(type="turn", turn=result)
+        return
+
+    provider = get_answer_provider()
+    buffer: list[str] = []
+    try:
+        for piece in provider.stream(question, chunks):
+            buffer.append(piece)
+            # 草稿按块落库：断流后重新读取可看到已生成内容。
+            turn.answer_draft = "".join(buffer)
+            session.commit()
+            _restore_rls_context(session, context)
+            current_turn = session.get(Turn, turn.id)
+            if current_turn is None:
+                raise ConversationNotFound
+            turn = current_turn
+            yield TurnStreamEvent(type="delta", text=piece)
+    except ConversationNotFound:
+        raise
+    except Exception:  # noqa: BLE001
+        _mark_failed(session, context, turn.id, "MODEL_UNAVAILABLE")
+        yield TurnStreamEvent(type="error", error_code="MODEL_UNAVAILABLE", message="生成中断")
+        return
+
+    answer_text = "".join(buffer)
+    try:
+        finished = _publish_answer(
+            session, context, knowledge_base_id, turn, answer_text, chunks
+        )
+    except SourceDeleted:
+        _mark_failed(session, context, turn.id, "SOURCE_DELETED")
+        yield TurnStreamEvent(
+            type="error", error_code="SOURCE_DELETED", message="引用来源已被删除"
+        )
+        return
+    except AccessRevoked:
+        _mark_failed(session, context, turn.id, "ACCESS_REVOKED")
+        yield TurnStreamEvent(
+            type="error", error_code="ACCESS_REVOKED", message="当前访问权限已失效"
+        )
+        return
+    except Exception:  # noqa: BLE001
+        _mark_failed(session, context, turn.id, "ANSWER_INVALID")
+        yield TurnStreamEvent(type="error", error_code="ANSWER_INVALID", message="回答校验失败")
+        return
+    yield TurnStreamEvent(type="turn", turn=finished)
 
 
 def turn_data(session: Session, turn: Turn) -> TurnOutData:
@@ -250,6 +457,7 @@ def turn_data(session: Session, turn: Turn) -> TurnOutData:
         question=turn.question,
         status=turn.status,
         answer=turn.answer,
+        answer_draft=turn.answer_draft,
         error_code=turn.error_code,
         started_at=turn.started_at,
         finished_at=turn.finished_at,

@@ -70,10 +70,19 @@ export type Turn = {
   question: string;
   status: TurnStatus;
   answer: string | null;
+  answer_draft: string | null;
   error_code: string | null;
   started_at: string;
   finished_at: string | null;
   citations: Citation[];
+};
+
+export type TurnStreamEvent = {
+  type: "turn" | "delta" | "error";
+  turn?: Turn;
+  text?: string;
+  error_code?: string;
+  message?: string;
 };
 
 export class ApiError extends Error {
@@ -239,4 +248,58 @@ export const api = {
         question,
       }),
     ),
+  streamConversationTurn: async (
+    teamId: string,
+    knowledgeBaseId: string,
+    conversationId: string,
+    clientRequestId: string,
+    question: string,
+    onEvent: (event: TurnStreamEvent) => void,
+    signal?: AbortSignal,
+  ) => {
+    const token = await ensureCsrfToken();
+    const response = await fetch(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/conversations/` +
+        `${conversationId}/turns/stream`,
+      {
+        method: FORM_METHOD,
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": token,
+        },
+        body: JSON.stringify({
+          client_request_id: clientRequestId,
+          question,
+        }),
+        signal,
+      },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const detail = body && typeof body.detail === "string" ? body.detail : "提问失败";
+      throw new ApiError(response.status, detail);
+    }
+    if (!response.body) throw new ApiError(502, "浏览器不支持流式回答");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const data = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("\n");
+        if (!data || data === "{}") continue;
+        onEvent(JSON.parse(data) as TurnStreamEvent);
+      }
+      if (done) break;
+    }
+  },
 };

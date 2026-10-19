@@ -19,6 +19,8 @@ const suggestions = ["概括资料的主要内容", "列出资料中的关键要
 
 const turnError = (turn: Turn): string => {
   if (turn.error_code === "MODEL_UNAVAILABLE") return "回答服务暂不可用，请稍后重新提问。";
+  if (turn.error_code === "SOURCE_DELETED") return "引用来源已被删除，请重新提问。";
+  if (turn.error_code === "ACCESS_REVOKED") return "当前访问权限已失效，请刷新后重试。";
   return "本次回答未完成，请重新提问。";
 };
 
@@ -124,20 +126,58 @@ export function AskPanel({
         question: text,
         status: "answering",
         answer: null,
+        answer_draft: null,
         error_code: null,
         started_at: new Date().toISOString(),
         finished_at: null,
         citations: [],
       };
       setTurns((items) => [...items, pending]);
-      const completed = await api.askConversation(
+      let streamedText = "";
+      let completed: Turn | null = null;
+      let streamError: ApiError | null = null;
+      await api.streamConversationTurn(
         teamId,
         knowledgeBaseId,
         conversationId,
         requestId,
         text,
+        (event) => {
+          if (event.type === "delta" && event.text) {
+            streamedText += event.text;
+            setTurns((items) =>
+              items.map((item) =>
+                item.client_request_id === requestId
+                  ? { ...item, answer_draft: streamedText }
+                  : item,
+              ),
+            );
+          } else if (event.type === "turn" && event.turn) {
+            completed = event.turn;
+            setTurns((items) => [
+              ...items.filter(
+                (item) =>
+                  item.id !== requestId &&
+                  item.client_request_id !== requestId &&
+                  item.id !== event.turn?.id,
+              ),
+              event.turn as Turn,
+            ]);
+          } else if (event.type === "error") {
+            streamError = new ApiError(
+              502,
+              event.message ?? "回答服务暂不可用，请稍后重试。",
+            );
+          }
+        },
       );
-      setTurns((items) => [...items.filter((item) => item.id !== requestId), completed]);
+      if (streamError) {
+        throw streamError;
+      }
+      if (!completed) {
+        const refreshed = await api.listTurns(teamId, knowledgeBaseId, conversationId);
+        setTurns(refreshed);
+      }
       setConversations((items) => [
         ...items
           .filter((item) => item.id === conversationId)
@@ -146,7 +186,6 @@ export function AskPanel({
       ]);
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "提问失败，请重试";
-      setTurns((items) => items.filter((item) => item.client_request_id !== requestId));
       setQuestion(text);
       onError(message);
       if (conversationId) setReloadTurns((revision) => revision + 1);
@@ -253,7 +292,13 @@ export function AskPanel({
                 <span className="answer-mark"><Icon name="book" size={18} /></span>
                 <div className="turn__content">
                   {turn.status === "answering" ? (
-                    <p className="turn__pending" role="status">正在检索资料并生成回答…</p>
+                    turn.answer_draft ? (
+                      <p className="turn__answer" aria-live="polite">
+                        {turn.answer_draft}
+                      </p>
+                    ) : (
+                      <p className="turn__pending" role="status">正在检索资料并生成回答…</p>
+                    )
                   ) : turn.status === "failed" || turn.status === "interrupted" ? (
                     <div className="turn__failure">
                       <p className="error-text" role="alert">{turnError(turn)}</p>

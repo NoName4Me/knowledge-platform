@@ -311,6 +311,8 @@ class Turn(Base):
     question: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="answering", index=True)
     answer: Mapped[str | None] = mapped_column(Text)
+    # 流式生成的中间文本；完成或失败后清空，避免与最终答案重复。
+    answer_draft: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(80))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

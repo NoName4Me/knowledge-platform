@@ -98,7 +98,18 @@ class TurnOut(BaseModel):
     question: str
     status: str
     answer: str | None
+    answer_draft: str | None
     error_code: str | None
     started_at: datetime
     finished_at: datetime | None
     citations: list[Citation]
+
+
+class TurnStreamEventOut(BaseModel):
+    """SSE 事件唯一合同，前端按 type 采用对应字段。"""
+
+    type: str
+    turn: TurnOut | None = None
+    text: str | None = None
+    error_code: str | None = None
+    message: str | None = None

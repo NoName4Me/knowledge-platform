@@ -108,6 +108,173 @@ def test_duplicate_turn_request_is_idempotent(client, session):
     assert conflict.status_code == 409
 
 
+def _stream_events(response) -> list[dict]:
+    import json
+
+    events: list[dict] = []
+    for line in response.text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if payload and payload != "{}":
+            events.append(json.loads(payload))
+    return events
+
+
+def test_stream_turn_emits_deltas_and_final_turn(client, session):
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    request_id = uuid.uuid4()
+    response = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns/stream",
+        json={"client_request_id": str(request_id), "question": "年假有几天？"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _stream_events(response)
+    assert events[0]["type"] == "turn"
+    deltas = "".join(event["text"] for event in events if event["type"] == "delta")
+    assert "五天" in deltas
+    final = [event["turn"] for event in events if event["type"] == "turn"][-1]
+    assert final["status"] == "completed"
+    assert final["answer"] == deltas
+    assert final["answer_draft"] is None
+    assert final["citations"]
+
+
+def test_stream_reuses_duplicate_request_without_second_turn(client, session):
+    from app.models import Turn
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    path = (
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns/stream"
+    )
+    request_id = str(uuid.uuid4())
+    first = _stream_events(
+        client.post(
+            path,
+            json={"client_request_id": request_id, "question": "年假有几天？"},
+        )
+    )
+    second = _stream_events(
+        client.post(
+            path,
+            json={"client_request_id": request_id, "question": "年假有几天？"},
+        )
+    )
+    assert first[-1]["turn"]["id"] == second[0]["turn"]["id"]
+    assert second[0]["turn"]["status"] == "completed"
+    assert len(session.scalars(select(Turn)).all()) == 1
+
+
+def test_stream_draft_is_visible_after_interrupted_connection(client, session):
+    from app.models import Turn
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    request_id = uuid.uuid4()
+    stream = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns/stream",
+        json={"client_request_id": str(request_id), "question": "年假有几天？"},
+    )
+    turn_id = uuid.UUID(_stream_events(stream)[0]["turn"]["id"])
+
+    # 模拟已生成部分文本但进程/客户端在最终发布前断开。
+    stored = session.get(Turn, turn_id)
+    assert stored is not None
+    stored.status = "answering"
+    stored.answer = None
+    stored.answer_draft = "年假规定：入职满一年可享"
+    session.commit()
+
+    history = client.get(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns"
+    ).json()
+    current = next(item for item in history if item["id"] == str(turn_id))
+    assert current["answer_draft"] == "年假规定：入职满一年可享"
+
+
+def test_stream_model_failure_emits_error_and_persists_failed_status(
+    client, session, monkeypatch
+):
+    from app import conversations
+
+    class FailingProvider:
+        def stream(self, question, chunks):
+            yield "未完成的草稿"
+            raise RuntimeError("model disconnected")
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    monkeypatch.setattr(conversations, "get_answer_provider", lambda: FailingProvider())
+    response = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns/stream",
+        json={"client_request_id": str(uuid.uuid4()), "question": "年假有几天？"},
+    )
+    events = _stream_events(response)
+    assert [event["type"] for event in events][-1] == "error"
+    assert events[-1]["error_code"] == "MODEL_UNAVAILABLE"
+
+    history = client.get(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns"
+    ).json()
+    assert history[0]["status"] == "failed"
+    assert history[0]["error_code"] == "MODEL_UNAVAILABLE"
+    assert history[0]["answer_draft"] is None
+
+
+def test_stream_revoked_membership_prevents_answer_publication(
+    client, session, monkeypatch
+):
+    from app import conversations
+    from app.models import TeamMembership
+
+    class RevokingProvider:
+        def stream(self, question, chunks):
+            membership = session.scalars(
+                select(TeamMembership).where(
+                    TeamMembership.user_id == owner.id,
+                    TeamMembership.team_id == team.id,
+                )
+            ).one()
+            session.delete(membership)
+            session.commit()
+            yield chunks[0].content
+            yield "\n\n[1]"
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    monkeypatch.setattr(conversations, "get_answer_provider", lambda: RevokingProvider())
+    response = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns/stream",
+        json={"client_request_id": str(uuid.uuid4()), "question": "年假有几天？"},
+    )
+    events = _stream_events(response)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["error_code"] == "ACCESS_REVOKED"
+    assert not any(
+        event["type"] == "turn" and event["turn"]["status"] == "completed"
+        for event in events
+    )
+
+    session.expire_all()
+    from app.models import Turn
+
+    turn = session.scalars(select(Turn)).one()
+    assert turn.status == "failed"
+    assert turn.error_code == "ACCESS_REVOKED"
+    assert turn.answer is None
+    assert turn.answer_draft is None
+
+
 def test_conversation_cannot_cross_knowledge_base(client, session):
     owner, team, kb = _setup(client, session)
     conversation = _conversation(client, team.id, kb["id"])
