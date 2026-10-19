@@ -11,6 +11,11 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class CsrfOut(BaseModel):
+    csrf_token: str
+    expires_at: datetime
+
+
 class UserOut(BaseModel):
     id: uuid.UUID
     email: str
@@ -26,6 +31,14 @@ class TeamSummary(BaseModel):
 class MeOut(BaseModel):
     user: UserOut
     teams: list[TeamSummary]
+    csrf_token: str
+
+
+class MemberOut(BaseModel):
+    user_id: uuid.UUID
+    email: str
+    display_name: str
+    role: str
 
 
 class DocumentOut(BaseModel):
@@ -56,4 +69,36 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     grounded: bool
+    citations: list[Citation]
+
+
+class ConversationCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=100)
+
+
+class ConversationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    knowledge_base_id: uuid.UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class TurnAskRequest(BaseModel):
+    client_request_id: uuid.UUID
+    question: str = Field(min_length=1, max_length=4000)
+
+
+class TurnOut(BaseModel):
+    id: uuid.UUID
+    seq: int
+    client_request_id: uuid.UUID
+    question: str
+    status: str
+    answer: str | None
+    error_code: str | None
+    started_at: datetime
+    finished_at: datetime | None
     citations: list[Citation]

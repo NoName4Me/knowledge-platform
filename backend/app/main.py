@@ -4,15 +4,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import ask, auth, documents, teams
+from app.csrf import CsrfMiddleware
+from app.routers import ask, auth, conversations, documents, teams
 
 settings = get_settings()
 
 app = FastAPI(title=settings.app_name)
 
+app.add_middleware(CsrfMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,6 +24,7 @@ app.include_router(auth.router)
 app.include_router(teams.router)
 app.include_router(documents.router)
 app.include_router(ask.router)
+app.include_router(conversations.router)
 
 
 @app.get("/api/health")

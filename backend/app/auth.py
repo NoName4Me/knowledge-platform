@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import get_session
-from app.models import SessionToken, Team, TeamMembership, User
+from app.db import apply_context, get_session
+from app.models import SessionToken, Team, User
 from app.security import hash_session_token
 
 settings = get_settings()
@@ -45,6 +45,8 @@ def get_current_user(request: Request, session: Session = Depends(get_session)) 
     user = session.get(User, token.user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号不可用")
+    # 行级安全依赖事务级用户上下文；缺失时成员表策略会拒绝访问。
+    apply_context(session, user_id=user.id)
     return user
 
 
@@ -53,16 +55,22 @@ def get_team_context(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> TeamContext:
-    stmt = (
-        select(TeamMembership, Team)
-        .join(Team, Team.id == TeamMembership.team_id)
-        .where(TeamMembership.team_id == team_id, TeamMembership.user_id == user.id)
-    )
-    row = session.execute(stmt).one_or_none()
+    row = session.execute(
+        text(
+            """
+            select m.role, v.name
+            from team_memberships m
+            join my_teams v on v.id = m.team_id
+            where m.team_id = :team_id and m.user_id = :user_id
+            """
+        ),
+        {"team_id": team_id, "user_id": user.id},
+    ).one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该团队")
-    membership, team = row
-    return TeamContext(user=user, team=team, role=membership.role)
+    team = Team(id=team_id, name=row.name)
+    apply_context(session, team_id=team.id)
+    return TeamContext(user=user, team=team, role=row.role)
 
 
 def require_admin(context: TeamContext = Depends(get_team_context)) -> TeamContext:

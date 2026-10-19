@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.config import get_settings
-from app.db import get_session
-from app.models import SessionToken, Team, TeamMembership, User
-from app.schemas import LoginRequest, MeOut, TeamSummary, UserOut
-from app.security import generate_session_token, hash_session_token, verify_password
+from app.csrf import issue_prelogin_token
+from app.db import apply_context, get_session
+from app.models import SessionToken, User
+from app.schemas import CsrfOut, LoginRequest, MeOut, TeamSummary, UserOut
+from app.security import (
+    derive_csrf_token,
+    generate_session_token,
+    hash_session_token,
+    verify_password,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
@@ -22,16 +28,39 @@ def _to_user_out(user: User) -> UserOut:
 
 
 def _teams_for_user(session: Session, user: User) -> list[TeamSummary]:
-    stmt = (
-        select(TeamMembership, Team)
-        .join(Team, Team.id == TeamMembership.team_id)
-        .where(TeamMembership.user_id == user.id)
-        .order_by(Team.name)
+    # teams 对运行角色不直接开放；只能通过只读视图读取已加入团队。
+    rows = session.execute(
+        text(
+            """
+            select m.team_id, v.name, m.role
+            from team_memberships m
+            join my_teams v on v.id = m.team_id
+            where m.user_id = :user_id
+            order by v.name
+            """
+        ),
+        {"user_id": user.id},
+    ).all()
+    return [TeamSummary(id=row.team_id, name=row.name, role=row.role) for row in rows]
+
+
+@router.get("/csrf", response_model=CsrfOut)
+def csrf(response: Response) -> CsrfOut:
+    """未登录时签发预登录令牌；已登录会话的令牌由 /login 与 /me 返回。"""
+    token = issue_prelogin_token()
+    response.set_cookie(
+        settings.csrf_cookie_name,
+        token,
+        max_age=settings.csrf_prelogin_seconds,
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure,
+        path="/",
     )
-    return [
-        TeamSummary(id=team.id, name=team.name, role=membership.role)
-        for membership, team in session.execute(stmt).all()
-    ]
+    return CsrfOut(
+        csrf_token=token,
+        expires_at=datetime.now(UTC) + timedelta(seconds=settings.csrf_prelogin_seconds),
+    )
 
 
 @router.post("/login", response_model=MeOut)
@@ -55,6 +84,8 @@ def login(
         )
     )
     session.commit()
+    # 提交会清除事务级上下文，列出团队前需要重新设置。
+    apply_context(session, user_id=user.id)
 
     response.set_cookie(
         settings.session_cookie_name,
@@ -65,7 +96,12 @@ def login(
         secure=settings.session_cookie_secure,
         path="/",
     )
-    return MeOut(user=_to_user_out(user), teams=_teams_for_user(session, user))
+    response.delete_cookie(settings.csrf_cookie_name, path="/")
+    return MeOut(
+        user=_to_user_out(user),
+        teams=_teams_for_user(session, user),
+        csrf_token=derive_csrf_token(raw_token, settings.secret_key),
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -77,8 +113,18 @@ def logout(
     session.execute(delete(SessionToken).where(SessionToken.user_id == user.id))
     session.commit()
     response.delete_cookie(settings.session_cookie_name, path="/")
+    response.delete_cookie(settings.csrf_cookie_name, path="/")
 
 
 @router.get("/me", response_model=MeOut)
-def me(user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> MeOut:
-    return MeOut(user=_to_user_out(user), teams=_teams_for_user(session, user))
+def me(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> MeOut:
+    raw_token = request.cookies.get(settings.session_cookie_name, "")
+    return MeOut(
+        user=_to_user_out(user),
+        teams=_teams_for_user(session, user),
+        csrf_token=derive_csrf_token(raw_token, settings.secret_key),
+    )

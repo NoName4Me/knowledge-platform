@@ -43,6 +43,7 @@ def retrieve(
             DocumentChunk.team_id == team_id,
             Document.knowledge_base_id == knowledge_base_id,
             Document.status == "ready",
+            Document.deleted_at.is_(None),
             DocumentChunk.embedding.is_not(None),
         )
         .order_by(distance)
