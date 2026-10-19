@@ -94,10 +94,6 @@ def upgrade() -> None:
         sa.Column("started_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("finished_at", sa.DateTime(timezone=True)),
         sa.UniqueConstraint(
-            "team_id", "knowledge_base_id", "conversation_id", "created_by_id",
-            name="uq_turn_owner_scope",
-        ),
-        sa.UniqueConstraint(
             "team_id", "knowledge_base_id", "id", "created_by_id",
             name="uq_turn_id_owner_scope",
         ),

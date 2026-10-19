@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -143,3 +144,68 @@ def test_deleted_source_hides_excerpt_but_keeps_citation(client, session):
     ).json()
     assert history[0]["citations"][0]["excerpt"] == ""
     assert history[0]["citations"][0]["document_title"] == citation["document_title"]
+
+
+def test_busy_conversation_rejects_second_turn(client, session):
+    from app.models import Conversation, Turn
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    stored_conversation = session.get(Conversation, conversation["id"])
+    assert stored_conversation is not None
+    session.add(
+        Turn(
+            team_id=team.id,
+            knowledge_base_id=uuid.UUID(kb["id"]),
+            conversation_id=stored_conversation.id,
+            created_by_id=owner.id,
+            client_request_id=uuid.uuid4(),
+            seq=1,
+            question="正在处理的问题",
+            status="answering",
+        )
+    )
+    session.commit()
+
+    response = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns",
+        json={"client_request_id": str(uuid.uuid4()), "question": "第二个问题"},
+    )
+    assert response.status_code == 409
+
+
+def test_stale_answering_turn_is_interrupted_and_retryable(client, session):
+    from app.models import Conversation, Turn
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    stored_conversation = session.get(Conversation, conversation["id"])
+    assert stored_conversation is not None
+    stale = Turn(
+        team_id=team.id,
+        knowledge_base_id=uuid.UUID(kb["id"]),
+        conversation_id=stored_conversation.id,
+        created_by_id=owner.id,
+        client_request_id=uuid.uuid4(),
+        seq=1,
+        question="中断的问题",
+        status="answering",
+        started_at=datetime.now(UTC) - timedelta(minutes=10),
+    )
+    session.add(stale)
+    session.commit()
+
+    history = client.get(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns"
+    ).json()
+    assert history[0]["status"] == "interrupted"
+    assert history[0]["error_code"] == "TURN_TIMEOUT"
+
+    response = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns",
+        json={"client_request_id": str(uuid.uuid4()), "question": "重新提问"},
+    )
+    assert response.status_code == 200

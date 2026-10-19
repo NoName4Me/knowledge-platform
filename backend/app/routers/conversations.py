@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.auth import TeamContext, get_team_context
+from app.config import get_settings
 from app.conversations import (
     ConversationBusy,
     ConversationNotFound,
@@ -15,7 +17,7 @@ from app.conversations import (
     get_owned_conversation,
     turn_data,
 )
-from app.db import get_session
+from app.db import apply_context, get_session
 from app.models import Conversation, KnowledgeBase, Turn
 from app.schemas import (
     ConversationCreate,
@@ -28,6 +30,27 @@ router = APIRouter(
     prefix="/api/teams/{team_id}/knowledge-bases/{knowledge_base_id}",
     tags=["conversations"],
 )
+settings = get_settings()
+
+
+def _close_stale_turns(session: Session, conversation_id: uuid.UUID) -> None:
+    """同步请求崩溃后不能永久占用会话；超时轮次需成为可重试终态。"""
+    cutoff = datetime.now(UTC) - timedelta(seconds=settings.turn_timeout_seconds)
+    session.execute(
+        text(
+            """
+            update turns
+            set status = 'interrupted',
+                error_code = 'TURN_TIMEOUT',
+                finished_at = now()
+            where conversation_id = :conversation_id
+              and created_by_id = app_current_user()
+              and status = 'answering'
+              and started_at < :cutoff
+            """
+        ),
+        {"conversation_id": conversation_id, "cutoff": cutoff},
+    )
 
 
 def _knowledge_base(
@@ -85,13 +108,11 @@ def list_turns(
         get_owned_conversation(session, context, knowledge_base_id, conversation_id)
     except ConversationNotFound as exc:
         raise HTTPException(status_code=404, detail="会话不存在") from exc
+    _close_stale_turns(session, conversation_id)
+    session.commit()
+    apply_context(session, user_id=context.user.id, team_id=context.team.id)
     turns = session.scalars(
-        select(Turn)
-        .where(
-            Turn.conversation_id == conversation_id,
-            Turn.created_by_id == context.user.id,
-        )
-        .order_by(Turn.seq)
+        select(Turn).where(Turn.conversation_id == conversation_id).order_by(Turn.seq)
     ).all()
     return [turn_data(session, turn) for turn in turns]
 
@@ -105,6 +126,13 @@ def ask_in_conversation(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> TurnOut:
+    try:
+        get_owned_conversation(session, context, knowledge_base_id, conversation_id)
+    except ConversationNotFound as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    _close_stale_turns(session, conversation_id)
+    session.commit()
+    apply_context(session, user_id=context.user.id, team_id=context.team.id)
     try:
         return answer_turn(
             session,

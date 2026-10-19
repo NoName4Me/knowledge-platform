@@ -138,6 +138,12 @@ def answer_turn(
             raise ConversationNotFound
         return turn_data(session, refreshed)
 
+    active = session.scalars(
+        select(Turn).where(Turn.conversation_id == conversation.id, Turn.status == "answering")
+    ).first()
+    if active is not None:
+        raise ConversationBusy
+
     seq = (
         session.scalar(select(func.max(Turn.seq)).where(Turn.conversation_id == conversation.id))
         or 0
@@ -155,7 +161,7 @@ def answer_turn(
     session.add(new_turn)
     session.flush()
 
-    # 外部模型调用前提交占位轮次，失败时转为明确终态。
+    # 先提交占位轮次，客户端可在断线后读取状态；崩溃遗留由超时收敛。
     session.commit()
     _restore_rls_context(session, context)
     turn = session.get(Turn, new_turn.id)
@@ -210,7 +216,11 @@ def answer_turn(
             )
         )
     conversation.updated_at = datetime.now(UTC)
-    session.commit()
+    try:
+        session.commit()
+    except Exception as exc:  # noqa: BLE001
+        session.rollback()
+        raise RuntimeError("回答持久化失败") from exc
     _restore_rls_context(session, context)
     refreshed = session.get(Turn, turn.id)
     if refreshed is None:

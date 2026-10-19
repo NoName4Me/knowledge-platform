@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     answer_model: str = "deepseek-chat"
     answer_base_url: str = ""
     answer_api_key: str = ""
+    # 同步问答请求中途崩溃时，遗留 answering 轮次超过此窗口后收敛为 interrupted。
+    turn_timeout_seconds: int = 180
 
     allow_public_signup: bool = False
 

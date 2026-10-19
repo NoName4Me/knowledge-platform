@@ -22,7 +22,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 EMBEDDING_DIM = 1024
 
 DOCUMENT_STATUSES = ("uploading", "pending", "processing", "ready", "failed", "deleted")
-TASK_STATUSES = ("queued", "running", "succeeded", "failed")
+TASK_STATUSES = ("queued", "running", "succeeded", "failed", "canceled")
 
 
 class Base(DeclarativeBase):
@@ -270,10 +270,6 @@ class Conversation(Base):
 class Turn(Base):
     __tablename__ = "turns"
     __table_args__ = (
-        UniqueConstraint(
-            "team_id", "knowledge_base_id", "conversation_id", "created_by_id",
-            name="uq_turn_owner_scope",
-        ),
         UniqueConstraint("conversation_id", "seq", name="uq_turn_seq"),
         UniqueConstraint("conversation_id", "client_request_id", name="uq_turn_request"),
         CheckConstraint(
