@@ -60,6 +60,8 @@ docker compose exec api python -m app.cli --email you@example.com --name 你的�
 
 本地 HTTP 部署需保持 `KP_SESSION_COOKIE_SECURE` 为 false；将来启用 HTTPS 时再设为 true。
 
+部署、数据持久化和服务重启的可重复验收步骤见 [Compose 验收记录](docs/operations/ACCEPTANCE-RUNBOOK.md)。
+
 ## 已实现的能力
 
 - 上传 PDF、DOCX、TXT、Markdown，文件写入本地对象存储，处理任务入队。
