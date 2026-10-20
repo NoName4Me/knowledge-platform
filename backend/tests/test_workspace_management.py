@@ -57,7 +57,10 @@ def test_folder_upload_rename_move_preserves_document_and_storage(client, sessio
     assert client.delete(f"{path}/{folder_id}").status_code == 204
 
 
-def test_folder_duplicate_names_invalid_names_and_nonempty_delete(client, session):
+def test_folder_duplicate_names_and_recursive_nonempty_delete(client, session):
+    from app.models import TeamQuota
+    from app.storage import get_object_store
+
     _, _, base, kb = setup_workspace(client, session)
     path = f"{base}/knowledge-bases/{kb}/folders"
     folder = client.post(path, json={"name": "制度"}).json()["id"]
@@ -66,16 +69,40 @@ def test_folder_duplicate_names_invalid_names_and_nonempty_delete(client, sessio
     assert client.post(path, json={"name": "a/b"}).status_code == 422
     doc = upload(client, base, kb, folder).json()
     child = client.post(path, json={"name": "子目录", "parent_id": folder}).json()
+    grandchild = client.post(
+        path, json={"name": "深层目录", "parent_id": child["id"]}
+    ).json()
+    child_doc = upload(client, base, kb, grandchild["id"]).json()
     assert child["parent_id"] == folder
     assert client.post(path, json={"name": "子目录", "parent_id": folder}).status_code == 409
+    session.expire_all()
+    quota = session.get(TeamQuota, uuid.UUID(base.rsplit("/", 1)[1]))
+    assert quota is not None
+    before_docs = quota.reserved_documents
+    before_bytes = quota.reserved_bytes
+    storage_keys = [
+        session.get(Document, uuid.UUID(item["id"])).storage_key
+        for item in (doc, child_doc)
+    ]
+    for key in storage_keys:
+        assert get_object_store().get(key) == b"public sample"
+
     assert client.delete(f"{path}/{folder}").status_code == 204
     session.expire_all()
-    assert session.get(Document, uuid.UUID(doc["id"])).folder_id is None
-    assert session.get(DocumentFolder, uuid.UUID(child["id"])).parent_id is None
-    assert (
-        client.get(f"{base}/documents", params={"knowledge_base_id": kb}).json()[0]["id"]
-        == doc["id"]
-    )
+    for item in (doc, child_doc):
+        document = session.get(Document, uuid.UUID(item["id"]))
+        assert document is not None
+        assert document.status == "deleted"
+        assert document.folder_id is None
+        with pytest.raises(FileNotFoundError):
+            get_object_store().get(document.storage_key)
+    for folder_id in (folder, child["id"], grandchild["id"]):
+        assert session.get(DocumentFolder, uuid.UUID(folder_id)) is None
+    assert client.get(f"{base}/documents", params={"knowledge_base_id": kb}).json() == []
+    quota = session.get(TeamQuota, uuid.UUID(base.rsplit("/", 1)[1]))
+    assert quota is not None
+    assert quota.reserved_documents == max(0, before_docs - 2)
+    assert quota.reserved_bytes == max(0, before_bytes - len("public sample") * 2)
 
 
 def test_folder_tree_move_rejects_cycles_and_respects_scope(client, session):
@@ -225,3 +252,54 @@ def test_kb_delete_cleans_documents_and_private_history(client, session):
     assert session.scalar(select(Conversation.id).where(Conversation.id == conversation_id)) is None
     assert session.get(Document, document_id) is None
     assert client.get(f"{base}/documents/{doc['id']}/content").status_code == 404
+
+
+def test_stale_kb_delete_guard_is_cleaned_by_migrations(session):
+    """早期本地库手工加过 guard_kb_delete，会让非空知识库删除直接报错。
+
+    它从未进入迁移，只残留在个别环境；迁移必须把它清掉，否则同一份代码
+    在测试库通过、在真实部署却 500。这里固定这个结果，避免再次漂移。
+    """
+    assert (
+        session.scalar(text("select count(*) from pg_trigger where tgname = 'guard_kb_delete'"))
+        == 0
+    )
+    assert (
+        session.scalar(text("select count(*) from pg_proc where proname = 'app_guard_kb_delete'"))
+        == 0
+    )
+
+
+def test_kb_delete_reports_conflict_instead_of_500(client, session):
+    """数据库仍拒绝删除时返回可读的 409，而不是裸露的 500。"""
+    _, _, base, kb = setup_workspace(client, session)
+    upload(client, base, kb)
+    session.execute(
+        text(
+            """
+            create or replace function app_guard_kb_delete() returns trigger
+            language plpgsql security definer set search_path = public as $$
+            begin
+              if exists(select 1 from documents where knowledge_base_id = old.id) then
+                raise exception 'knowledge base is not empty' using errcode = '23503';
+              end if;
+              return old;
+            end $$
+            """
+        )
+    )
+    session.execute(
+        text(
+            "create trigger guard_kb_delete before delete on knowledge_bases "
+            "for each row execute function app_guard_kb_delete()"
+        )
+    )
+    session.commit()
+    try:
+        response = client.delete(f"{base}/knowledge-bases/{kb}")
+        assert response.status_code == 409
+        assert "删除失败" in response.json()["detail"]
+    finally:
+        session.execute(text("drop trigger if exists guard_kb_delete on knowledge_bases"))
+        session.execute(text("drop function if exists app_guard_kb_delete()"))
+        session.commit()

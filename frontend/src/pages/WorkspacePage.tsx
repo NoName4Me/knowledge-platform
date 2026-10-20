@@ -1,12 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { api, ApiError, type KnowledgeBase, type TeamSummary } from "../lib/api";
+import { useToast } from "../lib/toast-context";
 import { knowledgeBasePath, workspaceRoute } from "../lib/workspace-route";
 import { readPreference, writePreference } from "../lib/workspace-preferences";
 import { MemberDialog } from "../components/MemberDialog";
 import { NameDialog } from "../components/NameDialog";
 import { ProfileMenu } from "../components/ProfileMenu";
 import { Modal } from "../components/Modal";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Brand, Icon } from "../components/Icon";
 import { PopoverMenu, SelectMenu } from "../components/Popover";
 import { KnowledgeWorkspace } from "./KnowledgeWorkspace";
@@ -51,16 +53,17 @@ function LibraryMenu({ library, onRename, onDelete, busy }: {
 
 export function WorkspacePage() {
   const { session } = useAuth();
+  const toast = useToast();
   const route = workspaceRoute(window.location.pathname);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [loading, setLoading] = useState(true);
   const [teamErrors, setTeamErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<Library | null>(null);
   const [managingTeam, setManagingTeam] = useState<TeamSummary | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<Library | null>(null);
   const [teamFilter, setTeamFilter] = useState("all");
   const [query, setQuery] = useState("");
   useEffect(() => {
@@ -90,16 +93,20 @@ export function WorkspacePage() {
   }
   function reload() { setLoading(true); setRevision((value) => value + 1); }
   async function deleteLibrary(kb: Library) {
-    if (deleting || !window.confirm(`永久删除知识库“${kb.name}”？\n\n其中的资料、目录、问答记录和分析结果都会一并清理，且无法恢复。`)) return;
-    setDeleting(kb.id); setError("");
+    if (deleting) return;
+    setDeleting(kb.id);
     try {
       await api.deleteKnowledgeBase(kb.team.id, kb.id);
+      toast.notify(`已删除知识库“${kb.name}”`, { kind: "success" });
       if (active?.id === kb.id) window.location.assign("/");
       else setLibraries((items) => items.filter((item) => item.id !== kb.id));
-    } catch (err) { setError(message(err, "删除知识库失败，请重试")); }
+    } catch (err) {
+      // 交给确认弹窗展示，用户可以在原地重试或取消。
+      throw new Error(message(err, "删除知识库失败，请重试"));
+    }
     finally { setDeleting(null); }
   }
-  const management = (kb: Library) => kb.team.role === "admin" ? <LibraryMenu library={kb} busy={deleting !== null} onRename={() => setRenaming(kb)} onDelete={() => void deleteLibrary(kb)} /> : null;
+  const management = (kb: Library) => kb.team.role === "admin" ? <LibraryMenu library={kb} busy={deleting !== null} onRename={() => setRenaming(kb)} onDelete={() => setConfirming(kb)} /> : null;
   return <div className="workbench">
     <a className="skip-link" href="#workspace-main">跳到工作区</a>
     <header className="workbench-header">
@@ -115,7 +122,6 @@ export function WorkspacePage() {
         /><small>{active?.team.name ?? ""}</small></div>{active && management(active)}</div>}
       <ProfileMenu />
     </header>
-    {error && <div className="workbench-error" role="alert"><span>{error}</span><button className="icon-button" type="button" onClick={() => setError("")} aria-label="关闭错误提示"><Icon name="close" size={16} /></button></div>}
     {route.kind === "home" ? <main id="workspace-main" className="home-page" tabIndex={-1}>
       <div className="home-intro"><div><h1>我的工作台</h1><p>从一份资料开始，把问题带进知识库。</p></div>{adminTeams.length > 0 && <button className="btn" type="button" onClick={() => setCreating(true)}><Icon name="plus" size={17} />新建知识库</button>}</div>
       <div className="home-layout"><section className="home-libraries" aria-labelledby="home-libraries-title">
@@ -128,6 +134,23 @@ export function WorkspacePage() {
     </main> : loading ? <main className="workbench-loading" id="workspace-main" role="status">正在进入知识库…</main> : active ? <KnowledgeWorkspace key={`${active.team.id}:${active.id}`} library={active} /> : <main className="workbench-loading" id="workspace-main"><Icon name="book" size={32} /><h1>无法进入这个知识库</h1><p>{route.kind === "knowledge" && teamErrors[route.teamId] ? teamErrors[route.teamId] : "知识库不存在、已删除，或你已不属于对应团队。"}</p><div><a className="btn btn--ghost" href="/">返回首页</a><button className="btn" type="button" onClick={reload}>重新加载</button></div></main>}
     {creating && <CreateLibrary teams={adminTeams} initialTeam={teamFilter !== "all" ? teamFilter : lastTeam} onClose={() => setCreating(false)} onCreated={enter} />}
     {renaming && <NameDialog title="重命名知识库" label="知识库名称" initial={renaming.name} onClose={() => setRenaming(null)} onSave={async (name) => { const updated = await api.renameKnowledgeBase(renaming.team.id, renaming.id, name); setLibraries((items) => items.map((kb) => kb.id === updated.id ? { ...kb, ...updated } : kb)); }} />}
-    {managingTeam && <MemberDialog teamId={managingTeam.id} onClose={() => setManagingTeam(null)} onError={setError} />}
+    {confirming && <ConfirmDialog
+      title={`删除知识库“${confirming.name}”？`}
+      confirmLabel="永久删除"
+      tone="danger"
+      onClose={() => setConfirming(null)}
+      onConfirm={() => deleteLibrary(confirming)}
+      description={<>
+        <p>这是不可恢复的操作，删除后会一并清理：</p>
+        <ul>
+          <li>该知识库内的全部资料与原始文件</li>
+          <li>目录结构，以及资料与目录的归属</li>
+          <li>所有成员的问答记录与引用依据</li>
+          <li>全部分析任务、字段提取与对比结论</li>
+        </ul>
+        <p>团队存储额度会同步释放；其他知识库不受影响。</p>
+      </>}
+    />}
+    {managingTeam && <MemberDialog teamId={managingTeam.id} onClose={() => setManagingTeam(null)} onError={(value) => toast.notify(value, { kind: "error" })} />}
   </div>;
 }

@@ -1,7 +1,9 @@
 import type { CSSProperties, ReactNode } from "react";
 
-type IconName = "book" | "file" | "upload" | "send" | "quote" | "logout" | "chevron" | "trash" | "plus" | "shield" | "close" | "folder" | "home" | "more" | "external" | "user" | "back" | "check" | "edit";
+type IconName = "book" | "file" | "upload" | "send" | "quote" | "logout" | "chevron" | "trash" | "plus" | "shield" | "close" | "folder" | "home" | "more" | "external" | "user" | "back" | "check" | "edit" | "alert" | "info";
 const paths: Record<IconName, ReactNode> = {
+  alert: <><path d="M12 4 2.5 20h19L12 4Z" /><path d="M12 10v4m0 3v.5" /></>,
+  info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5m0-8v.5" /></>,
   check: <path d="m5 12 4 4L19 6" />,
   edit: <><path d="m4 20 4.3-1 10.8-10.8a2.1 2.1 0 0 0-3-3L5.3 16Z" /><path d="m14.8 6.5 3 3" /></>,
   close: <path d="m6 6 12 12M18 6 6 18" />,

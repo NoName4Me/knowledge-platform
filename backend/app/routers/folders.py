@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.auth import TeamContext, get_team_context, require_admin
 from app.db import get_session
 from app.models import Document, DocumentFolder, KnowledgeBase
+from app.storage import delete_objects_best_effort
+from app.upload_service import mark_deleted, release_quota_once
 
 router = APIRouter(
     prefix="/api/teams/{team_id}/knowledge-bases/{knowledge_base_id}/folders",
@@ -181,12 +183,55 @@ def delete_folder(
     session: Session = Depends(get_session),
 ) -> None:
     folder = get_folder(session, context, knowledge_base_id, folder_id)
-    # 删除目录只移除整理结构；资料归属不变，子目录提升到知识库根级。
-    session.execute(update(Document).where(Document.folder_id == folder.id).values(folder_id=None))
+    folder_ids = [folder.id]
+    pending = [folder.id]
+    seen = {folder.id}
+    while pending:
+        children = list(
+            session.scalars(
+                select(DocumentFolder)
+                .where(
+                    DocumentFolder.parent_id.in_(pending),
+                    DocumentFolder.knowledge_base_id == knowledge_base_id,
+                    DocumentFolder.team_id == context.team.id,
+                )
+                .with_for_update()
+            )
+        )
+        pending = []
+        for child in children:
+            if child.id in seen:
+                continue
+            seen.add(child.id)
+            folder_ids.append(child.id)
+            pending.append(child.id)
+
+    documents = list(
+        session.scalars(
+            select(Document)
+            .where(
+                Document.folder_id.in_(folder_ids),
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.team_id == context.team.id,
+            )
+            .with_for_update()
+        )
+    )
+    storage_keys = [document.storage_key for document in documents]
+    for document in documents:
+        mark_deleted(session, document)
+        release_quota_once(session, context.team.id, document)
+
+    # 资料记录保留已删除状态供历史引用核对；先解除目录外键，再让数据库递归级联子目录。
     session.execute(
-        update(DocumentFolder)
-        .where(DocumentFolder.parent_id == folder.id)
-        .values(parent_id=None)
+        update(Document)
+        .where(Document.id.in_([document.id for document in documents]))
+        .values(folder_id=None)
     )
     session.delete(folder)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(409, "目录删除失败，可能仍有关联数据未清理，请刷新后重试") from exc
+    delete_objects_best_effort(storage_keys)

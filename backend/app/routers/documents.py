@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import uuid
 from urllib.parse import quote
 
@@ -25,7 +24,7 @@ from app.db import apply_context, get_session
 from app.models import Document, DocumentFolder, KnowledgeBase
 from app.reconciliation import retry_failed_upload
 from app.schemas import DocumentOut
-from app.storage import get_object_store
+from app.storage import delete_objects_best_effort, get_object_store
 from app.upload_service import (
     SUPPORTED_TYPES,
     IdempotencyConflict,
@@ -234,8 +233,7 @@ def delete_document(
     # 先提交不可见状态；后续对象删除失败不会让文档复活。
     mark_deleted(session, document)
     session.commit()
-    with contextlib.suppress(OSError):
-        get_object_store().delete(document.storage_key)
+    delete_objects_best_effort([document.storage_key])
     apply_context(session, user_id=context.user.id, team_id=context.team.id)
     release_quota_once(session, context.team.id, document)
     session.commit()

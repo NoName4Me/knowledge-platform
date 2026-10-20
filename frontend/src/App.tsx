@@ -2,6 +2,7 @@ import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
+import { ToastProvider } from "./components/ToastProvider";
 import "./styles/app.css";
 import "./styles/workbench.css";
 
@@ -34,8 +35,10 @@ function Routes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Routes />
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <Routes />
+      </AuthProvider>
+    </ToastProvider>
   );
 }

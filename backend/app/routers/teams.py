@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,7 +12,7 @@ from app.auth import TeamContext, get_team_context, require_admin
 from app.db import get_session
 from app.models import Document, KnowledgeBase, TeamMembership, User
 from app.schemas import MemberOut, TeamSummary
-from app.storage import get_object_store
+from app.storage import delete_objects_best_effort
 from app.upload_service import release_quota_once
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
@@ -102,11 +101,16 @@ def delete_knowledge_base(
     for document in documents:
         release_quota_once(session, context.team.id, document)
     session.delete(kb)
-    session.commit()
-    store = get_object_store()
-    for storage_key in storage_keys:
-        with contextlib.suppress(OSError):
-            store.delete(storage_key)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        # 数据库触发器或外键仍可能拒绝删除；回滚后给出可操作的错误，而不是裸露的 500。
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="知识库删除失败，可能仍有关联数据未清理，请刷新后重试",
+        ) from exc
+    delete_objects_best_effort(storage_keys)
 
 
 def _member_rows(session: Session, team_id: uuid.UUID) -> list[MemberOut]:

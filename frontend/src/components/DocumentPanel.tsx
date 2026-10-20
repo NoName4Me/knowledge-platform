@@ -9,6 +9,7 @@ import { Icon } from "./Icon";
 import { Modal } from "./Modal";
 import { NameDialog } from "./NameDialog";
 import { PopoverMenu } from "./Popover";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type Props = {
   inert?: boolean;
@@ -93,6 +94,7 @@ export function DocumentPanel({
   onError,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const uploadFolderId = useRef<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
@@ -109,6 +111,9 @@ export function DocumentPanel({
   } | null>(null);
   const [documentEdit, setDocumentEdit] = useState<DocumentItem | null>(null);
   const [preview, setPreview] = useState<DocumentItem | null>(null);
+  const [confirming, setConfirming] = useState<
+    { kind: "document"; document: DocumentItem } | { kind: "folder"; folder: DocumentFolder } | null
+  >(null);
   const [drag, setDrag] = useState<{
     kind: "folder" | "document";
     id: string;
@@ -157,6 +162,7 @@ export function DocumentPanel({
 
   async function handleFiles(files: FileList | null) {
     if (!files?.length || uploading) return;
+    const targetFolderId = uploadFolderId.current ?? uploadTarget?.id ?? null;
     setUploading(true);
     try {
       for (const file of Array.from(files)) {
@@ -164,7 +170,7 @@ export function DocumentPanel({
           teamId,
           knowledgeBaseId,
           file,
-          uploadTarget?.id,
+          targetFolderId,
         );
       }
     } catch (err) {
@@ -176,25 +182,30 @@ export function DocumentPanel({
         onError("资料列表刷新失败，请重新加载页面");
       }
       setUploading(false);
+      uploadFolderId.current = null;
       if (inputRef.current) inputRef.current.value = "";
     }
   }
 
+  function chooseUploadTarget(folderId: string | null) {
+    uploadFolderId.current = folderId;
+    if (folderId) selectFolder(folderId);
+    inputRef.current?.click();
+  }
+
   async function deleteDocument(document: DocumentItem) {
-    if (
-      !window.confirm(
-        `删除资料“${document.filename}”？\n\n资料将无法继续检索，相关分析结果可能失效，且无法恢复。`,
-      )
-    ) {
-      return;
-    }
     setBusy(document.id);
     try {
       await api.deleteDocument(teamId, document.id);
       setPreview(null);
-      await onChanged();
+      try {
+        await onChanged();
+      } catch {
+        onError("资料已删除，但资料列表刷新失败，请重新加载页面");
+      }
     } catch (err) {
-      onError(errorMessage(err, "删除失败，请重试"));
+      // 由确认弹窗展示失败原因，便于在原位重试。
+      throw new Error(errorMessage(err, "删除失败，请重试"));
     } finally {
       setBusy(null);
     }
@@ -213,31 +224,22 @@ export function DocumentPanel({
   }
 
   async function deleteFolder(folder: DocumentFolder) {
-    if (
-      !window.confirm(
-        `删除目录“${folder.name}”？\n\n目录内的资料不会删除，会回到“未分类”；直属子目录会移到知识库根级。`,
-      )
-    ) {
-      return;
-    }
     setBusy(folder.id);
     try {
       await api.deleteFolder(teamId, knowledgeBaseId, folder.id);
-      updateFolders(
-        folders
-          .filter((item) => item.id !== folder.id)
-          .map((item) =>
-            item.parent_id === folder.id ? { ...item, parent_id: null } : item,
-          ),
-      );
-      if (
-        selectedFolderId === folder.id ||
-        folderPath(folders, selectedFolderId).some((item) => item.id === folder.id)
-      ) {
+      const removedIds = new Set([folder.id, ...descendants(folders, folder.id)]);
+      updateFolders(folders.filter((item) => !removedIds.has(item.id)));
+      if (selectedFolderId !== null && removedIds.has(selectedFolderId)) {
         setSelectedFolderId(null);
       }
+      setPreview(null);
+      try {
+        await onChanged();
+      } catch {
+        onError("目录已删除，但资料列表刷新失败，请重新加载页面");
+      }
     } catch (err) {
-      onError(errorMessage(err, "删除目录失败"));
+      throw new Error(errorMessage(err, "删除目录失败"));
     } finally {
       setBusy(null);
     }
@@ -288,6 +290,30 @@ export function DocumentPanel({
     } finally {
       setBusy(null);
     }
+  }
+
+  function folderDeleteDescription(folder: DocumentFolder) {
+    const folderIds = new Set([folder.id, ...descendants(folders, folder.id)]);
+    const documentCount = documents.filter(
+      (document) => document.folder_id && folderIds.has(document.folder_id),
+    ).length;
+    const childCount = folderIds.size - 1;
+    return (
+      <>
+        <p>删除后，这个目录下的全部内容都无法恢复：</p>
+        <ul>
+          <li>
+            {documentCount
+              ? `将删除 ${documentCount} 份资料及其原始文件`
+              : "目录内没有资料"}
+          </li>
+          <li>
+            {childCount ? `将同时删除 ${childCount} 个子目录` : "目录内没有子目录"}
+          </li>
+        </ul>
+        <p>相关资料将无法继续检索，引用它的分析结果可能失效；团队存储额度会同步释放。</p>
+      </>
+    );
   }
 
   function dropOn(
@@ -359,10 +385,11 @@ export function DocumentPanel({
         <div className={`tree-folder__row${selectedFolderId === folder.id ? " is-selected" : ""}`}>
           <button
             type="button"
-            className="tree-folder__toggle"
+            className="tree-folder__expand"
             aria-expanded={isOpen}
+            aria-label={`${isOpen ? "收起" : "展开"}目录 ${folder.name}`}
+            title={isOpen ? "收起" : "展开"}
             onClick={() => {
-              selectFolder(folder.id);
               setExpanded((current) => {
                 const next = new Set(current);
                 if (next.has(folder.id)) next.delete(folder.id);
@@ -376,6 +403,13 @@ export function DocumentPanel({
               size={13}
               style={{ transform: isOpen ? undefined : "rotate(-90deg)" }}
             />
+          </button>
+          <button
+            type="button"
+            className="tree-folder__toggle"
+            aria-pressed={selectedFolderId === folder.id}
+            onClick={() => selectFolder(folder.id)}
+          >
             <Icon name="folder" size={16} />
             <span>{folder.name}</span>
             <small>{folderDocuments(documents, folder.id).length}</small>
@@ -402,8 +436,9 @@ export function DocumentPanel({
                 trigger={<Icon name="more" size={15} />}
               >
                 {(close) => <>
+                  <button type="button" role="menuitem" onClick={() => { close(); chooseUploadTarget(folder.id); }}><Icon name="upload" size={15} />上传到这里</button>
                   <button type="button" role="menuitem" onClick={() => { close(); setNameDialog({ mode: "rename", parentId: folder.parent_id, folder }); }}><Icon name="edit" size={15} />重命名</button>
-                  <button type="button" role="menuitem" className="is-danger" disabled={busy !== null} onClick={() => { close(); void deleteFolder(folder); }}><Icon name="trash" size={15} />删除</button>
+                  <button type="button" role="menuitem" className="is-danger" disabled={busy !== null} onClick={() => { close(); setConfirming({ kind: "folder", folder }); }}><Icon name="trash" size={15} />删除</button>
                 </>}
               </PopoverMenu>
             </div>
@@ -469,7 +504,7 @@ export function DocumentPanel({
           >
             {(close) => <>
               <button type="button" role="menuitem" onClick={() => { close(); setDocumentEdit(document); }}><Icon name="edit" size={15} />重命名</button>
-              <button type="button" role="menuitem" className="is-danger" disabled={busy !== null} onClick={() => { close(); void deleteDocument(document); }}><Icon name="trash" size={15} />删除</button>
+              <button type="button" role="menuitem" className="is-danger" disabled={busy !== null} onClick={() => { close(); setConfirming({ kind: "document", document }); }}><Icon name="trash" size={15} />删除</button>
             </>}
           </PopoverMenu>
         )}
@@ -535,7 +570,7 @@ export function DocumentPanel({
           className="btn"
           type="button"
           disabled={uploading || folderLoading}
-          onClick={() => inputRef.current?.click()}
+          onClick={() => chooseUploadTarget(selectedFolderId)}
         >
           <Icon name="upload" size={16} />
           {uploading ? "正在上传…" : "上传资料"}
@@ -696,6 +731,22 @@ export function DocumentPanel({
             </div>
           </div>
         </Modal>
+      )}
+
+      {confirming && (
+        <ConfirmDialog
+          title={confirming.kind === "document" ? `删除资料“${confirming.document.filename}”？` : `删除目录“${confirming.folder.name}”？`}
+          confirmLabel="删除"
+          tone="danger"
+          onClose={() => setConfirming(null)}
+          onConfirm={() => confirming.kind === "document" ? deleteDocument(confirming.document) : deleteFolder(confirming.folder)}
+          description={confirming.kind === "document" ? (
+            <>
+              <p>删除后这份资料无法继续检索，相关分析结果可能失效。</p>
+              <p>原始文件会被清理，操作无法恢复。</p>
+            </>
+          ) : folderDeleteDescription(confirming.folder)}
+        />
       )}
     </section>
   );

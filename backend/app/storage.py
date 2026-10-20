@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Protocol
 
@@ -9,6 +11,7 @@ import boto3
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class ObjectStore(Protocol):
@@ -102,3 +105,17 @@ def get_object_store() -> ObjectStore:
         else:
             raise ValueError(f"不支持的对象存储类型：{settings.storage_backend}")
     return _store
+
+
+def delete_objects_best_effort(keys: Iterable[str]) -> None:
+    """数据库已提交后清理原始文件；单个对象失败只记录日志，不回滚业务删除。"""
+    try:
+        store = get_object_store()
+    except Exception:
+        logger.exception("对象存储初始化失败，未能清理原始文件")
+        return
+    for key in keys:
+        try:
+            store.delete(key)
+        except Exception:
+            logger.exception("原始文件清理失败：%s", key)

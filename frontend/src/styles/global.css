@@ -17,6 +17,8 @@ svg { flex-shrink: 0; vertical-align: middle; }
 .btn:hover:not(:disabled) { background: var(--accent-hover); }
 .btn--ghost { background: var(--surface); color: var(--ink); border-color: var(--control-line); }
 .btn--ghost:hover:not(:disabled) { background: var(--surface-strong); }
+.btn--danger { background: var(--danger); color: #fff; }
+.btn--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 84%, #000); }
 .icon-button { width: 36px; min-height: 36px; padding: 8px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; }
 .icon-button:hover:not(:disabled) { background: var(--surface-strong); }
 .field { display: flex; flex-direction: column; gap: 8px; }

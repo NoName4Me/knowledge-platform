@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type TeamInvitation, type TeamMember } from "../lib/api";
 import { Icon } from "./Icon";
 import { SelectMenu } from "./Popover";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type Props = {
   teamId: string;
@@ -21,6 +22,7 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
   const [role, setRole] = useState<"admin" | "member">("member");
   const [inviting, setInviting] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [removingMember, setRemovingMember] = useState<TeamMember | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,13 +79,12 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
   }
 
   async function remove(member: TeamMember) {
-    if (!window.confirm(`将 ${member.display_name} 移出团队？`)) return;
     setRemoving(member.user_id);
     try {
       await api.removeMember(teamId, member.user_id);
       setMembers((items) => items.filter((item) => item.user_id !== member.user_id));
     } catch (err) {
-      onError(message(err, "移除成员失败"));
+      throw new Error(message(err, "移除成员失败"));
     } finally {
       setRemoving(null);
     }
@@ -167,7 +168,7 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
                 <button
                   className="btn btn--ghost member-row__remove"
                   disabled={removing !== null}
-                  onClick={() => void remove(member)}
+                  onClick={() => setRemovingMember(member)}
                 >
                   移除
                 </button>
@@ -195,6 +196,19 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
               ))}
             </ul>
           </section>
+        )}
+        {removingMember && (
+          <ConfirmDialog
+            title={`将 ${removingMember.display_name} 移出团队？`}
+            confirmLabel="移出团队"
+            tone="danger"
+            onClose={() => setRemovingMember(null)}
+            onConfirm={() => remove(removingMember)}
+            description={<>
+              <p>{removingMember.display_name} 将无法继续访问本团队的资料、问答与分析。</p>
+              <p>其已创建的私人问答和分析记录会保留，但本人不再可见。</p>
+            </>}
+          />
         )}
       </section>
     </div>
