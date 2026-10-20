@@ -17,7 +17,7 @@
 | `frontend/src/pages/WorkspacePage.tsx`、`components/` | 团队/知识库范围、资料列表及依据展示方式 | 分析入口、表单、历史、进度和结果表 |
 | `backend/tests/`、`evaluation/` | 独立 PostgreSQL、权限/竞争测试和真实评测分离 | V2 标注数据、协议替身及真实质量评测 |
 
-保持模块化单体、现有 PostgreSQL、生成模型、对象存储和 Compose。分析服务拥有事务，路由只处理协议；分析适配接口与原问答接口分开，避免问答提示词承担 JSON 提取。无需增加 Redis、向量库或框架。
+保持模块化单体、现有 PostgreSQL、生成模型和对象存储。当前以本地 API、worker、前端进程运行，发布阶段再使用 Compose 验证部署；分析服务拥有事务，路由只处理协议，分析适配接口与原问答接口分开，避免问答提示词承担 JSON 提取。无需增加 Redis、向量库或框架。
 
 ## 最小数据责任
 

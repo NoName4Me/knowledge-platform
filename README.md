@@ -2,7 +2,7 @@
 
 面向通用文档场景的团队知识工作台。V1 目标：上传文档、解析、检索、问答并核对原文依据，支持多团队数据与权限隔离。
 
-当前进度：V1（身份隔离、可靠任务、上传与删除闭环、解析检索、本人持久会话、流式问答）与 V2（多文档信息提取、批量与文档对比、有依据结论）功能闭环已落地并通过自动化测试。V1 已接入本地 Ollama bge-m3、Garage S3 兼容存储与 DeepSeek flash，并完成固定 60 题质量评测与 5 并发延迟验收。V2 当前在部署中用确定性替身验证链路与权限，真实模型质量评测尚未执行。
+当前进度：V1（身份隔离、可靠任务、上传与删除闭环、解析检索、本人持久会话、流式问答）与 V2（多文档信息提取、批量与文档对比、有依据结论）功能闭环已落地并通过自动化测试。V1 已接入本地 Ollama bge-m3、Garage S3 兼容存储与 DeepSeek flash，并完成固定 60 题质量评测与 5 并发延迟验收。V2 真实模型适配已接入，但真实质量评测与人工验收尚未执行。
 
 ## 目录结构
 
@@ -13,20 +13,23 @@ frontend/  React + TypeScript 前端
 
 ## 本地启动与重启
 
-本地开发时，API、worker、前端分别在自己的终端前台运行，日志直接显示在对应终端。
-PostgreSQL、Garage 等基础服务继续由 `~/jonge/infra` 的 Docker Compose 提供。
+当前开发与功能验收的唯一预期应用运行方式是本地前台进程：API、worker、前端分别在
+自己的终端运行，日志直接显示在对应终端。PostgreSQL、Garage、Ollama 等基础服务由
+`~/jonge/infra` 统一管理。
+项目根目录的 Docker Compose 已退出当前日常运行流程，仅保留给未来发布阶段验证构建、
+容器部署、数据持久化和服务重启；现阶段不要求启动项目应用容器。
 以下路径按当前本机目录编写；更换仓库位置时相应替换。
 
 ### 配置文件：本地用 backend/.env
 
-| 启动方式 | 配置文件 | 页面地址 |
+| 运行方式 | 配置文件 | 页面地址 |
 | --- | --- | --- |
-| 本地 API + worker + Vite | `backend/.env` | `http://localhost:5173` |
-| 项目 Docker Compose 部署 | 项目根目录 `.env` | `http://localhost:8080`（默认） |
+| 当前本地 API + worker + Vite | `backend/.env` | `http://localhost:5173` |
+| 未来发布阶段 Compose 验收 | 项目根目录 `.env` | `http://localhost:8080`（默认） |
 
 本地后端从**启动时的工作目录**读取 `.env`，所以 API、worker、迁移与管理员命令
-都必须先进入 `backend/`。Compose 从项目根目录 `.env` 取值，并将其配置中声明的变量
-注入容器；不会自动读取 `backend/.env`。两份文件互不自动同步，进程环境变量优先于文件。
+都必须先进入 `backend/`。未来发布阶段若使用项目 Compose，它从项目根目录 `.env`
+取值并将其注入容器，不会自动读取 `backend/.env`。两份文件互不自动同步。
 
 已有 `backend/.env` 时直接编辑，不要覆盖。首次配置可执行：
 
@@ -100,7 +103,7 @@ cd ~/jonge/infra
 ```
 
 初始化会检查固定的 `bge-m3-local` 模型版本，并验证真实嵌入接口返回 1024 维向量。
-模型首次准备与独立检查见 [基础环境说明](../../infra/README.md#ollama-与嵌入模型)。
+模型首次准备与独立检查见 `~/jonge/infra/README.md` 的“Ollama 与嵌入模型”一节。
 上传解析与检索需要嵌入服务可用。
 
 **终端一：API。** 更新代码后先升级数据库，再启动服务：
@@ -174,20 +177,8 @@ curl -f http://localhost:5173/api/health
 - 上传或分析一直排队：检查本地 worker 终端是否运行，以及该终端是否报错。
 - 端口已占用：按上述方法停止本项目旧进程，再启动；不要重复开启多套同端口服务。
 - 修改密钥后仍显示替身：确认修改的是 `backend/.env`，重启 API 与 worker，再创建新任务。
-- 本地与 Docker 页面账号或资料不同：比较两边数据库和存储配置。当前本机本地连接
-  infra 的 `kplatform` 库与 Garage；项目 Compose 使用自己的 `kplatform_dev` 库与存储卷，
-  数据不会自动同步。新环境以实际 `.env` 配置为准。
-
-如暂时只用本地应用，可在项目目录停止 Docker 版应用，保留其数据库与数据卷：
-
-```bash
-cd /Users/liuhongmei/jonge/learn/k-platform
-docker compose stop api worker web
-```
-
-Docker 版日志可用 `docker compose logs -f api worker web` 查看。
-修改根目录 `.env` 后，Docker 版需执行 `docker compose up -d --force-recreate api worker`
-重新创建容器以加载配置；单纯 `docker compose restart` 不更新容器环境变量。
+- 基础服务不可用：先检查 `~/jonge/infra` 是否已启动 PostgreSQL、Garage 与 Ollama；
+  当前项目应用本身不需要启动 Docker 容器。
 
 ## 检查与测试
 
@@ -207,7 +198,10 @@ npm run build
 
 后端测试需要一个独立的 PostgreSQL 数据库，测试会重建该库的 schema，不要指向正在使用的库。
 
-## 部署（Mac mini 模拟服务器）
+## 未来发布阶段：Compose 部署验收
+
+本节不是当前开发启动方式。V2 功能开发完成并准备正式发布时，再用项目根目录的
+Compose 验证镜像构建、容器部署、迁移、持久化和重启。届时执行：
 
 ```bash
 cp .env.example .env   # 填写 KP_SECRET_KEY 与数据库密码
@@ -219,16 +213,17 @@ KP_BOOTSTRAP_PASSWORD='强密码' docker compose exec -e KP_BOOTSTRAP_PASSWORD a
 
 访问 `http://<主机>:${KP_HTTP_PORT:-8080}`。数据保存在命名卷 `db-data`，容器重建后仍保留。
 
-本地 HTTP 部署需保持 `KP_SESSION_COOKIE_SECURE` 为 false；将来启用 HTTPS 时再设为 true。
+发布阶段的本地 HTTP 部署需保持 `KP_SESSION_COOKIE_SECURE` 为 false；启用 HTTPS 后再设为 true。
 
-部署、数据持久化和服务重启的可重复验收步骤见 [Compose 验收记录](docs/operations/ACCEPTANCE-RUNBOOK.md)。
+发布前执行步骤见 [Compose 发布验收清单](docs/operations/ACCEPTANCE-RUNBOOK.md)；
+清单在当前阶段尚未执行，不作为本地开发前置条件。
 
 固定 60 题质量与并发结果见 [质量验收记录](docs/operations/V1-QUALITY-ACCEPTANCE.md)，
 评测入口与盲审步骤见 [`evaluation/README.md`](evaluation/README.md)。
 
 ## 已实现的能力
 
-- 上传 PDF、DOCX、TXT、Markdown，文件写入本地对象存储，处理任务入队。
+- 上传 PDF、DOCX、TXT、Markdown，文件写入配置的对象存储，处理任务入队。
 - 后台 worker 使用租约令牌领取和续租，限制重试次数，并周期对账中断上传；删除资料会取消旧任务。
 - 上传使用幂等键、团队额度锁与逻辑删除，删除或迟到写入不能让资料复活。
 - 身份请求具有 CSRF 校验、成员与最后管理员保护、复合归属约束及 PostgreSQL RLS。
@@ -244,6 +239,7 @@ KP_BOOTSTRAP_PASSWORD='强密码' docker compose exec -e KP_BOOTSTRAP_PASSWORD a
 - 管理员通过顶部“管理知识库”改名或删除知识库；删除非空知识库会连同资料、目录、问答记录和分析结果一并清理。
 - V2 分析在工作台“分析”模式中：单文档或多文档提取字段、按维度对比，结果与结论均附可核对原文依据，仅创建者本人可见。
 - 分析使用独立后台任务路径，具有租约、续跑、并发限额与撤权/删除保护；批量失败不覆盖成功结果，重新运行保留旧记录。
+- 删除资料、目录或知识库时同步清理对象存储原件；目录删除递归处理其下全部子目录与资料。
 - 分析任务记录 `provider`/`model`，界面明确区分替身与真实模型来源。
 
 GitHub Actions 在每次推送及拉取请求执行后端静态检查、全量测试和前端 lint/构建。
@@ -254,7 +250,7 @@ GitHub Actions 在每次推送及拉取请求执行后端静态检查、全量�
 - 重排尚未接入；当前基线为向量召回与中英文词项召回的混合检索。
 - 固定题集的人工盲审尚未完成，自动结构检查结果不能替代人工结论。
 - 本地开发已启用生成与嵌入模型的真实适配器；自动化测试仍使用确定性替身。
-- V2 真实分析模型未配置，尚未执行真实质量评测；当前部署的分析结果来自确定性替身，只证明流程与权限，不代表提取或对比质量。详见 [V2 质量验收状态](docs/operations/V2-QUALITY-ACCEPTANCE.md)。
+- V2 真实模型适配已完成且本地配置可接入模型，但真实质量评测、容量测试与人工盲审尚未执行；替身验证只证明流程与权限，不代表提取或对比质量。详见 [V2 质量验收状态](docs/operations/V2-QUALITY-ACCEPTANCE.md)。
 
 ## 界面设计指导
 

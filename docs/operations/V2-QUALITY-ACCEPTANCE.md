@@ -3,12 +3,15 @@
 状态：2026-10-20。**功能闭环与替身验收已完成；真实模型质量验收未执行。**
 本记录不包含任何真实模型质量结论或通过率。
 
-## 当前部署配置
+## 当前运行配置
 
-- 部署：本机 Compose（`api` / `worker` / `web` / `db`），数据库迁移版本
-  `0013_v2_batch_comparison`。
-- 分析模型：未配置 `KP_ANALYSIS_MODEL_BASE_URL` 与 `KP_ANALYSIS_MODEL_API_KEY`，
-  运行使用确定性替身（`provider=stub`）。
+- 应用：本机前台进程（FastAPI API、worker、Vite 前端）；PostgreSQL、Garage、Ollama
+  由 `~/jonge/infra` 管理。项目应用的 Docker Compose 推迟到发布阶段验收。
+- 分析模型：`backend/.env` 已填写 `KP_ANALYSIS_MODEL_BASE_URL` 与
+  `KP_ANALYSIS_MODEL_API_KEY`；是否实际调用真实模型以新建任务详情中的 `provider`
+  和 `model` 为准，历史替身结果不因修改配置而变化。
+- 以下历史 Compose 记录只说明当时曾完成部署验证，不代表当前运行方式，也不能替代
+  发布前重新执行的 Compose 验收。
 - 分析存储：与 V1 共用 PostgreSQL、对象存储与权限模型；分析任务、结果与依据带
   团队/知识库/创建者归属，仅创建者本人可读。
 
@@ -16,7 +19,7 @@
 
 ### 自动化
 
-- 后端全量 `pytest`：**164 passed**（V1 99 + V2 65）。
+- 最近一次后端全量 `pytest`：**180 passed**；V2 分析核心故障与权限测试包含其中。
 - `ruff check .`、`mypy app`、`python -m app.typegen --check` 通过。
 - 前端 `npm run lint`、`npm run build` 通过（仅既有 `AuthContext` Fast Refresh 警告）。
 - 固定样例静态校验：4 份语料、6 个样例、18 条预期，依据均可定位。
@@ -29,7 +32,7 @@
 - 并发创建达到用户/团队上限：显式拒绝；终态释放额度。
 - 日志与列表响应不包含提取内容、原文或凭据。
 
-### 部署与持久化
+### 历史 Compose 与持久化记录
 
 - Compose 重建并迁移到 `0013` 后，`api`、`db`、`web` 健康，`worker` 运行；
   `GET /api/health` 返回 `{"status":"ok"}`。
@@ -48,7 +51,8 @@
 
 ## 未执行与待办
 
-- 未配置真实分析模型，**未取得任何真实提取或对比质量数字**。
+- 真实分析模型凭据已写入 `backend/.env`，但尚未用重启后的本地 API/worker 完成真实评测，
+  **未取得任何真实提取或对比质量数字**。
 - 固定样例仍为 6 个公开资料短样例，尚未按 V2-SCOPE 扩到建议规模，也未覆盖长文、
   多格式大样本与对抗性文档指令。
 - 未测真实吞吐、排队时间、p50/p95 耗时，以及分析对 V1 上传/问答的影响。
@@ -56,12 +60,14 @@
 
 ## 完成真实质量验收需要
 
-1. 配置 `KP_ANALYSIS_MODEL_BASE_URL`、`KP_ANALYSIS_MODEL`、`KP_ANALYSIS_MODEL_API_KEY`
-   并重建 `api`/`worker`。
+1. 确认 `backend/.env` 中的 `KP_ANALYSIS_MODEL_BASE_URL`、`KP_ANALYSIS_MODEL`、
+   `KP_ANALYSIS_MODEL_API_KEY` 正确，重启本地 API 与 worker，然后创建新分析任务，
+   通过任务详情的 `provider`/`model` 确认真实模型已生效。
 2. 扩充并冻结公开语料与人工标注，确认字段、维度、预期值与质量门槛。
 3. 用 `evaluation/v2/evaluate.py` 在不加 `--allow-stub` 的情况下执行，保存
    `results.json`、用量与耗时。
 4. 由人工复核失败项并给出通过/不通过结论，再更新本文件。
 
-只有完成以上步骤，才能把 V2 质量标为已验收。构建成功、自动化测试通过与替身样例
-执行均不构成质量验收。
+发布阶段还需按 [Compose 发布验收清单](ACCEPTANCE-RUNBOOK.md) 重新验证容器构建、
+迁移、持久化和重启。只有完成质量评测、人工复核和发布验收，才能把 V2 整体标为完成；
+构建成功、自动化测试通过与替身样例执行均不构成质量验收。
