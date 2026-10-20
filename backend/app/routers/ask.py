@@ -16,9 +16,7 @@ from app.schemas import AskRequest, AskResponse, Citation
 
 router = APIRouter(prefix="/api/teams/{team_id}/ask", tags=["ask"])
 settings = get_settings()
-ask_limiter = FixedWindowLimiter(
-    settings.ask_rate_limit, settings.ask_rate_window_seconds
-)
+ask_limiter = FixedWindowLimiter(settings.ask_rate_limit, settings.ask_rate_window_seconds)
 
 
 @router.post("", response_model=AskResponse)

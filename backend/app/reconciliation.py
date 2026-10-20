@@ -48,11 +48,7 @@ def reconcile_uploads_once(session: Session, *, limit: int = 100) -> Reconciliat
     for candidate in candidates:
         apply_context(session, team_id=candidate.team_id)
         document = session.get(Document, candidate.document_id)
-        if (
-            document is None
-            or document.status != "uploading"
-            or document.updated_at >= cutoff
-        ):
+        if document is None or document.status != "uploading" or document.updated_at >= cutoff:
             session.rollback()
             continue
         unique = session.scalars(

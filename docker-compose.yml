@@ -21,8 +21,12 @@ services:
       KP_ENVIRONMENT: ${KP_ENVIRONMENT:-production}
       KP_SECRET_KEY: ${KP_SECRET_KEY:?KP_SECRET_KEY is required}
       KP_SESSION_COOKIE_SECURE: ${KP_SESSION_COOKIE_SECURE:-false}
-      KP_ALLOWED_ORIGINS: '["http://localhost:${KP_HTTP_PORT:-8080}","http://127.0.0.1:${KP_HTTP_PORT:-8080}"]'
+      KP_ALLOWED_ORIGINS: '["http://localhost:${KP_HTTP_PORT:-8080}","http://127.0.0.1:${KP_HTTP_PORT:-8080}","http://127.0.0.1:8090","http://localhost:8090"]'
       KP_STORAGE_ROOT: /data/documents
+      KP_ANALYSIS_MODEL_BASE_URL: ${KP_ANALYSIS_MODEL_BASE_URL:-}
+      KP_ANALYSIS_MODEL: ${KP_ANALYSIS_MODEL:-deepseek-flash}
+      KP_ANALYSIS_MODEL_API_KEY: ${KP_ANALYSIS_MODEL_API_KEY:-}
+      KP_ANALYSIS_MODEL_TIMEOUT_SECONDS: ${KP_ANALYSIS_MODEL_TIMEOUT_SECONDS:-90}
     volumes:
       - doc-storage:/data/documents
     depends_on:
@@ -45,8 +49,12 @@ services:
       KP_ENVIRONMENT: ${KP_ENVIRONMENT:-production}
       KP_SECRET_KEY: ${KP_SECRET_KEY:?KP_SECRET_KEY is required}
       KP_SESSION_COOKIE_SECURE: ${KP_SESSION_COOKIE_SECURE:-false}
-      KP_ALLOWED_ORIGINS: '["http://localhost:${KP_HTTP_PORT:-8080}","http://127.0.0.1:${KP_HTTP_PORT:-8080}"]'
+      KP_ALLOWED_ORIGINS: '["http://localhost:${KP_HTTP_PORT:-8080}","http://127.0.0.1:${KP_HTTP_PORT:-8080}","http://127.0.0.1:8090","http://localhost:8090"]'
       KP_STORAGE_ROOT: /data/documents
+      KP_ANALYSIS_MODEL_BASE_URL: ${KP_ANALYSIS_MODEL_BASE_URL:-}
+      KP_ANALYSIS_MODEL: ${KP_ANALYSIS_MODEL:-deepseek-flash}
+      KP_ANALYSIS_MODEL_API_KEY: ${KP_ANALYSIS_MODEL_API_KEY:-}
+      KP_ANALYSIS_MODEL_TIMEOUT_SECONDS: ${KP_ANALYSIS_MODEL_TIMEOUT_SECONDS:-90}
     volumes:
       - doc-storage:/data/documents
     depends_on:

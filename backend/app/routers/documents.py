@@ -39,6 +39,7 @@ from app.upload_service import (
 router = APIRouter(prefix="/api/teams/{team_id}/documents", tags=["documents"])
 settings = get_settings()
 
+
 def _get_knowledge_base(session: Session, team_id: uuid.UUID, kb_id: uuid.UUID) -> KnowledgeBase:
     # 调用方已经应用团队上下文；这里仍显式校验，避免把路径参数当作归属。
     kb = session.get(KnowledgeBase, kb_id)

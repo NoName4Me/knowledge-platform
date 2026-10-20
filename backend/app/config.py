@@ -56,6 +56,30 @@ class Settings(BaseSettings):
     # 同步问答请求中途崩溃时，遗留 answering 轮次超过此窗口后收敛为 interrupted。
     turn_timeout_seconds: int = 180
 
+    # V2 分析模型。留空时使用确定性替身，仅供开发与自动化测试；
+    # 配置后使用同一供应商的真实结构化提取，不回退替身。
+    analysis_model_base_url: str = ""
+    analysis_model: str = "deepseek-flash"
+    analysis_model_api_key: str = ""
+    analysis_model_timeout_seconds: int = 90
+
+    # V2 分析使用保守的初始预算；实际容量由固定公开语料验收后再调整。
+    analysis_max_documents: int = 10
+    analysis_max_fields: int = 20
+    analysis_max_document_chars: int = 1_000_000
+    analysis_max_total_chars: int = 3_000_000
+    analysis_batch_chars: int = 12_000
+    analysis_max_calls_per_document: int = 40
+    analysis_max_output_chars: int = 50_000
+    analysis_max_value_chars: int = 2_000
+    analysis_max_list_items: int = 50
+    analysis_max_citations_per_field: int = 20
+    analysis_timeout_seconds: int = 600
+    analysis_max_attempts: int = 2
+    analysis_user_max_active_tasks: int = 2
+    analysis_team_max_active_tasks: int = 10
+    analysis_lease_seconds: int = 180
+
     # 当前部署为单 API 进程，使用进程内固定窗口限流。
     login_email_rate_limit: int = 10
     login_ip_rate_limit: int = 50

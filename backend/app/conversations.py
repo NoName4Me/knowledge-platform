@@ -61,13 +61,11 @@ def get_owned_conversation(
     *,
     for_update: bool = False,
 ) -> Conversation:
-    statement = (
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.team_id == context.team.id,
-            Conversation.knowledge_base_id == knowledge_base_id,
-            Conversation.created_by_id == context.user.id,
-        )
+    statement = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.team_id == context.team.id,
+        Conversation.knowledge_base_id == knowledge_base_id,
+        Conversation.created_by_id == context.user.id,
     )
     if for_update:
         statement = statement.with_for_update()
@@ -94,9 +92,7 @@ def create_conversation(
     return conversation
 
 
-def _citation_items(
-    session: Session, turn: Turn
-) -> list[Citation]:
+def _citation_items(session: Session, turn: Turn) -> list[Citation]:
     rows = session.execute(
         select(CitationRecord, Document)
         .join(Document, Document.id == CitationRecord.document_id)
@@ -117,10 +113,13 @@ def _citation_items(
         else:
             excerpt = ""
             if citation.chunk_id is not None:
-                excerpt = session.scalar(
-                    text("select content from document_chunks where id = :id"),
-                    {"id": citation.chunk_id},
-                ) or ""
+                excerpt = (
+                    session.scalar(
+                        text("select content from document_chunks where id = :id"),
+                        {"id": citation.chunk_id},
+                    )
+                    or ""
+                )
             items.append(
                 Citation(
                     document_id=citation.document_id,
@@ -140,10 +139,7 @@ def _validate_answer(answer: str, chunks: list[RetrievedChunk]) -> list[Retrieve
 
 
 def _answer_is_insufficient(answer: str) -> bool:
-    return (
-        indicates_insufficient_grounding(answer)
-        and len(answer.strip()) <= 100
-    )
+    return indicates_insufficient_grounding(answer) and len(answer.strip()) <= 100
 
 
 def begin_turn(
@@ -251,16 +247,12 @@ def _ensure_publish_access(
     if membership is None:
         raise AccessRevoked
     try:
-        return get_owned_conversation(
-            session, context, knowledge_base_id, turn.conversation_id
-        )
+        return get_owned_conversation(session, context, knowledge_base_id, turn.conversation_id)
     except ConversationNotFound as exc:
         raise AccessRevoked from exc
 
 
-def _finish_insufficient(
-    session: Session, context: TeamContext, turn: Turn
-) -> TurnOutData:
+def _finish_insufficient(session: Session, context: TeamContext, turn: Turn) -> TurnOutData:
     turn.status = "insufficient"
     turn.answer = "依据不足：没有检索到能够支持回答的团队资料。"
     turn.answer_draft = None
@@ -436,14 +428,10 @@ def stream_answer(
 
     answer_text = "".join(buffer)
     try:
-        finished = _publish_answer(
-            session, context, knowledge_base_id, turn, answer_text, chunks
-        )
+        finished = _publish_answer(session, context, knowledge_base_id, turn, answer_text, chunks)
     except SourceDeleted:
         _mark_failed(session, context, turn.id, "SOURCE_DELETED")
-        yield TurnStreamEvent(
-            type="error", error_code="SOURCE_DELETED", message="引用来源已被删除"
-        )
+        yield TurnStreamEvent(type="error", error_code="SOURCE_DELETED", message="引用来源已被删除")
         return
     except AccessRevoked:
         _mark_failed(session, context, turn.id, "ACCESS_REVOKED")

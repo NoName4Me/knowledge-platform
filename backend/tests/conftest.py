@@ -64,7 +64,9 @@ def session() -> Iterator[Session]:
             text(
                 "TRUNCATE users, teams, team_memberships, knowledge_bases, session_tokens, "
                 "documents, document_chunks, processing_tasks, team_quotas, "
-                "upload_requests, conversations, turns, citations CASCADE"
+                "upload_requests, conversations, turns, citations, "
+                "analysis_citations, analysis_conclusions, analysis_field_results, "
+                "analysis_documents, analysis_fields, analysis_tasks CASCADE"
             )
         )
 

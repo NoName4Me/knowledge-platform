@@ -6,7 +6,15 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app import db
+from app import analysis, db
+from app.analysis_tasks import (
+    AnalysisLeaseLost,
+    claim_next_document,
+    claim_next_summary,
+    reclaim_expired_documents,
+    reclaim_expired_summaries,
+)
+from app.config import get_settings
 from app.db import apply_context
 from app.embeddings import get_embedding_provider
 from app.models import Document, DocumentChunk, ProcessingTask
@@ -29,6 +37,9 @@ logger = logging.getLogger("kp.worker")
 
 POLL_INTERVAL_SECONDS = 2.0
 RECONCILE_INTERVAL_SECONDS = 300.0
+settings = get_settings()
+# 两条执行路径交替轮询，避免批量分析长时间占满 worker 而饿死上传解析。
+_LAST_SCHEDULED = "analysis"
 
 
 def process_task(
@@ -105,7 +116,125 @@ def process_task(
     logger.info("文档 %s 处理完成，共 %d 个片段", document.id, len(chunks))
 
 
-def run_once() -> bool:
+def _reclaim_analysis() -> None:
+    with db.SessionLocal() as session:
+        reclaimed = reclaim_expired_documents(session)
+        for execution_id, task_id, team_id, owner_id, exhausted in reclaimed:
+            logger.warning("回收了过期的分析执行 execution=%s task=%s", execution_id, task_id)
+            if not exhausted:
+                with db.SessionLocal() as recovery:
+                    apply_context(recovery, team_id=team_id, user_id=owner_id)
+                    analysis.reconcile_task(recovery, task_id)
+                    recovery.commit()
+                continue
+            with db.SessionLocal() as recovery:
+                apply_context(recovery, team_id=team_id, user_id=owner_id)
+                analysis.mark_exhausted(recovery, execution_id)
+                recovery.commit()
+        summaries = reclaim_expired_summaries(session)
+        session.commit()
+        for summary_id, task_id, team_id, owner_id, exhausted in summaries:
+            with db.SessionLocal() as recovery:
+                apply_context(recovery, team_id=team_id, user_id=owner_id)
+                if exhausted:
+                    analysis.mark_summary_exhausted(recovery, summary_id)
+                else:
+                    analysis.reconcile_task(recovery, task_id)
+                recovery.commit()
+
+
+def _run_analysis_once() -> bool:
+    """领取并执行一份文档的分析；一次只跑一个文档阶段。"""
+    with db.SessionLocal() as session:
+        claimed = claim_next_document(session, settings.analysis_lease_seconds)
+        session.commit()
+        if claimed is None:
+            session.rollback()
+            return False
+
+    from app.analysis_worker import run_analysis_document
+
+    with db.SessionLocal() as session:
+        try:
+            outcome = run_analysis_document(
+                session,
+                execution_id=claimed.document_execution_id,
+                task_id=claimed.task_id,
+                team_id=claimed.team_id,
+                owner_id=claimed.owner_id,
+                document_id=claimed.document_id,
+                lease_token=claimed.lease_token,
+            )
+        except AnalysisLeaseLost:
+            session.rollback()
+            logger.warning("分析执行 %s 租约已失效，放弃发布", claimed.document_execution_id)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            session.rollback()
+            logger.exception("分析执行 %s 异常", claimed.document_execution_id, exc_info=exc)
+            with db.SessionLocal() as recovery:
+                # 分析表按“团队 + 创建者”双重 RLS；只设团队上下文会让更新命中 0 行。
+                apply_context(recovery, team_id=claimed.team_id, user_id=claimed.owner_id)
+                analysis.fail_execution(
+                    recovery,
+                    execution_id=claimed.document_execution_id,
+                    error_code="ANALYSIS_MODEL_UNAVAILABLE",
+                    detail=f"未预期错误：{exc}",
+                    retryable=True,
+                )
+                recovery.commit()
+            return True
+        else:
+            session.commit()
+            logger.info("分析执行 %s 结束：%s", claimed.document_execution_id, outcome)
+    return True
+
+
+def _run_summary_once() -> bool:
+    """领取并执行一次对比汇总；有界模型调用后归还 worker。"""
+    with db.SessionLocal() as session:
+        claimed = claim_next_summary(session, settings.analysis_lease_seconds)
+        session.commit()
+        if claimed is None:
+            session.rollback()
+            return False
+
+    from app.analysis_summary import run_analysis_summary
+
+    with db.SessionLocal() as session:
+        try:
+            outcome = run_analysis_summary(
+                session,
+                summary_id=claimed.summary_id,
+                task_id=claimed.task_id,
+                team_id=claimed.team_id,
+                owner_id=claimed.owner_id,
+                lease_token=claimed.lease_token,
+            )
+        except AnalysisLeaseLost:
+            session.rollback()
+            logger.warning("分析汇总 %s 租约已失效，放弃发布", claimed.summary_id)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            session.rollback()
+            logger.exception("分析汇总 %s 异常", claimed.summary_id, exc_info=exc)
+            with db.SessionLocal() as recovery:
+                apply_context(recovery, team_id=claimed.team_id, user_id=claimed.owner_id)
+                analysis.fail_summary(
+                    recovery,
+                    task_id=claimed.task_id,
+                    error_code="ANALYSIS_MODEL_UNAVAILABLE",
+                    detail=f"汇总未预期错误：{exc}",
+                )
+                recovery.commit()
+            return True
+        else:
+            session.commit()
+            logger.info("分析汇总 %s 结束：%s", claimed.summary_id, outcome)
+    return True
+
+
+def _run_parsing_once() -> bool:
     with db.SessionLocal() as session:
         reclaimed = reclaim_expired_tasks(session)
         session.commit()
@@ -148,6 +277,25 @@ def run_once() -> bool:
                     mark_failed(recovery, task, document, f"未预期错误：{exc}")
                     recovery.commit()
     return True
+
+
+def run_once() -> bool:
+    """公平轮询两条执行路径；先到者优先，另一条路径下一次获得机会。"""
+    global _LAST_SCHEDULED
+    _reclaim_analysis()
+    order = ("parsing", "analysis") if _LAST_SCHEDULED == "analysis" else ("analysis", "parsing")
+    worked = False
+    for kind in order:
+        if kind == "parsing":
+            if _run_parsing_once():
+                worked = True
+                _LAST_SCHEDULED = "parsing"
+                break
+        elif _run_summary_once() or _run_analysis_once():
+            worked = True
+            _LAST_SCHEDULED = "analysis"
+            break
+    return worked
 
 
 def main() -> None:

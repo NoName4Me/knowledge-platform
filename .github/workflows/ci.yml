@@ -57,7 +57,11 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: mypy app
+      - name: Check V2 frontend types match backend contract
+        run: python -m app.typegen --check
       - run: python -m pytest
+      - name: Validate V2 fixed samples
+        run: python ../evaluation/v2/validate_cases.py
 
   frontend:
     runs-on: ubuntu-latest

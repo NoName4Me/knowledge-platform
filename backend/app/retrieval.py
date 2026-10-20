@@ -76,15 +76,9 @@ def retrieve(
         top_k or settings.retrieval_top_k,
         candidate_k or settings.retrieval_candidate_k,
     )
-    threshold = (
-        settings.retrieval_distance_limit
-        if distance_limit is None
-        else distance_limit
-    )
+    threshold = settings.retrieval_distance_limit if distance_limit is None else distance_limit
     lexical_threshold = (
-        settings.retrieval_min_lexical_score
-        if min_lexical_score is None
-        else min_lexical_score
+        settings.retrieval_min_lexical_score if min_lexical_score is None else min_lexical_score
     )
     distance = DocumentChunk.embedding.l2_distance(query_vector)
     stmt = (

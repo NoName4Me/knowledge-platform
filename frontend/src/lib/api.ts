@@ -1,3 +1,25 @@
+import type {
+  AnalysisCreateRequest,
+  AnalysisDetailOut,
+  AnalysisTaskListOut,
+  AnalysisTaskOut,
+} from "./analysis-types";
+
+export type {
+  AnalysisCitationOut,
+  AnalysisConclusionOut,
+  AnalysisCreateRequest,
+  AnalysisDetailOut,
+  AnalysisDocumentOut,
+  AnalysisDocumentResultOut,
+  AnalysisFieldInput,
+  AnalysisFieldOut,
+  AnalysisFieldResultOut,
+  AnalysisSummaryOut,
+  AnalysisTaskListOut,
+  AnalysisTaskOut,
+} from "./analysis-types";
+
 export type TeamSummary = {
   id: string;
   name: string;
@@ -102,9 +124,11 @@ export type TurnStreamEvent = {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code: string | null;
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -120,8 +144,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    const detail = body && typeof body.detail === "string" ? body.detail : "请求失败";
-    throw new ApiError(response.status, detail);
+    const detail = body?.detail;
+    if (typeof detail === "string") {
+      throw new ApiError(response.status, detail);
+    }
+    if (
+      detail &&
+      typeof detail === "object" &&
+      typeof detail.message === "string"
+    ) {
+      throw new ApiError(
+        response.status,
+        detail.message,
+        typeof detail.code === "string" ? detail.code : null,
+      );
+    }
+    throw new ApiError(response.status, "请求失败");
   }
   return body as T;
 }
@@ -253,6 +291,37 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: "{}",
     }),
+
+  listAnalyses: (teamId: string, knowledgeBaseId: string, cursor?: string) => {
+    const query = new URLSearchParams();
+    if (cursor) query.set("cursor", cursor);
+    const suffix = query.toString();
+    return request<AnalysisTaskListOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/analyses` +
+        (suffix ? `?${suffix}` : ""),
+    );
+  },
+  createAnalysis: (
+    teamId: string,
+    knowledgeBaseId: string,
+    payload: AnalysisCreateRequest,
+    idempotencyKey: string,
+  ) =>
+    writeRequest<AnalysisTaskOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/analyses`,
+      {
+        ...jsonInit(FORM_METHOD, payload),
+        // 重复点击复用同一提交标识，避免创建重复任务。
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+      },
+    ),
+  getAnalysis: (teamId: string, knowledgeBaseId: string, analysisId: string) =>
+    request<AnalysisDetailOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/analyses/${analysisId}`,
+    ),
 
   ask: (teamId: string, knowledgeBaseId: string, question: string) =>
     writeRequest<AskResponse>(

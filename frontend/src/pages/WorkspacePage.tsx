@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { api, ApiError, type DocumentItem, type KnowledgeBase, type TeamSummary } from "../lib/api";
+import { AnalysisPanel } from "../components/AnalysisPanel";
 import { AskPanel } from "../components/AskPanel";
 import { DocumentPanel } from "../components/DocumentPanel";
 import { MemberDialog } from "../components/MemberDialog";
@@ -66,6 +67,7 @@ function KnowledgeWorkspace({ team, knowledgeBase }: { team: TeamSummary; knowle
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"ask" | "analysis">("ask");
   const refresh = useCallback(async () => { setDocuments(await api.listDocuments(team.id, knowledgeBase.id)); }, [team.id, knowledgeBase.id]);
   const processing = documents.some((doc) => doc.status === "pending" || doc.status === "processing");
   useEffect(() => {
@@ -82,10 +84,18 @@ function KnowledgeWorkspace({ team, knowledgeBase }: { team: TeamSummary; knowle
   }, [team.id, knowledgeBase.id, processing]);
   return <>
     {error && <p className="error-text" role="alert">{error}</p>}
+    <div className="workspace-modebar">
+      <div className="workspace-modebar__modes" aria-label="工作模式">
+        <button type="button" aria-pressed={mode === "ask"} onClick={() => setMode("ask")}>问答</button>
+        <button type="button" aria-pressed={mode === "analysis"} onClick={() => setMode("analysis")}>分析</button>
+      </div>
+      <p><Icon name="book" size={14} />{team.name}<span>/</span>{knowledgeBase.name}</p>
+      {mode === "analysis" && <span className="workspace-modebar__privacy"><Icon name="shield" size={14} />仅本人可见</span>}
+    </div>
     <div className="workspace__panels">
       <DocumentPanel teamId={team.id} knowledgeBaseId={knowledgeBase.id} documents={documents} loading={loading} canDelete={team.role === "admin"} onChanged={refresh} onError={setError} />
-      <AskPanel teamId={team.id} knowledgeBaseId={knowledgeBase.id} canAsk={documents.some((doc) => doc.status === "ready")} processing={processing} onError={setError} />
+      {mode === "ask" ? <AskPanel teamId={team.id} knowledgeBaseId={knowledgeBase.id} canAsk={documents.some((doc) => doc.status === "ready")} processing={processing} onError={setError} /> : <AnalysisPanel key={`${team.id}:${knowledgeBase.id}`} teamId={team.id} teamName={team.name} knowledgeBaseId={knowledgeBase.id} knowledgeBaseName={knowledgeBase.name} documents={documents} onError={setError} />}
     </div>
-    <p className="workspace__footnote"><Icon name="quote" size={14} /> 回答供参考，请结合引用原文核对。</p>
+    <p className="workspace__footnote"><Icon name="quote" size={14} /> {mode === "ask" ? "回答供参考，请结合引用原文核对。" : "提取结果与判断请结合原文依据核对。"}</p>
   </>;
 }

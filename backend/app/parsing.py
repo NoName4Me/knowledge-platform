@@ -85,7 +85,9 @@ def _extract_pdf(data: bytes) -> list[ExtractedChunk]:
     chunks: list[ExtractedChunk] = []
     for page_number, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
-        for chunk in _split_text(text, f"第 {page_number} 页"):
+        for chunk in _split_text(text, "片段"):
+            # 与纯文本、Markdown 保持一致的“位置 · 片段序号”读法，
+            # 避免出现“第 1 页 · 第 1 页 1”这类重复前缀。
             chunk.locator_label = f"第 {page_number} 页 · {chunk.locator_label}"
             chunks.append(chunk)
     return chunks

@@ -1,22 +1,24 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 1024
@@ -159,9 +161,7 @@ class TeamQuota(Base):
 class UploadRequest(Base):
     __tablename__ = "upload_requests"
     __table_args__ = (
-        UniqueConstraint(
-            "team_id", "user_id", "idempotency_key", name="uq_upload_idempotency"
-        ),
+        UniqueConstraint("team_id", "user_id", "idempotency_key", name="uq_upload_idempotency"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -245,7 +245,10 @@ class Conversation(Base):
     __tablename__ = "conversations"
     __table_args__ = (
         UniqueConstraint(
-            "team_id", "knowledge_base_id", "id", "created_by_id",
+            "team_id",
+            "knowledge_base_id",
+            "id",
+            "created_by_id",
             name="uq_conversation_owner_scope",
         ),
     )
@@ -288,7 +291,10 @@ class Turn(Base):
             ondelete="CASCADE",
         ),
         UniqueConstraint(
-            "team_id", "knowledge_base_id", "id", "created_by_id",
+            "team_id",
+            "knowledge_base_id",
+            "id",
+            "created_by_id",
             name="uq_turn_id_owner_scope",
         ),
     )
@@ -300,9 +306,7 @@ class Turn(Base):
     knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE")
     )
-    conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), index=True
-    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     created_by_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE")
     )
@@ -348,9 +352,7 @@ class CitationRecord(Base):
     knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE")
     )
-    turn_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), index=True
-    )
+    turn_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     owner_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE")
     )
@@ -401,4 +403,409 @@ class TeamInvitation(Base):
     accepted_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+ANALYSIS_KINDS = ("extraction", "comparison")
+ANALYSIS_STATUSES = ("queued", "running", "completed", "partial", "failed", "invalidated")
+ANALYSIS_DOCUMENT_STATUSES = ("queued", "running", "succeeded", "failed")
+ANALYSIS_RESULT_STATUSES = ("extracted", "not_mentioned", "needs_review", "failed")
+ANALYSIS_FIELD_TYPES = ("text", "number", "date", "text_list")
+ANALYSIS_CONCLUSION_KINDS = ("common", "difference", "needs_review")
+ANALYSIS_SUMMARY_STATUSES = ("queued", "running", "succeeded", "failed")
+
+
+class AnalysisTask(Base):
+    __tablename__ = "analysis_tasks"
+    __table_args__ = (
+        CheckConstraint("kind in ('extraction', 'comparison')", name="ck_analysis_kind"),
+        CheckConstraint(
+            "status in ('queued', 'running', 'completed', 'partial', 'failed', 'invalidated')",
+            name="ck_analysis_status",
+        ),
+        CheckConstraint(
+            "stage in ('queued', 'extracting', 'comparing', 'finished')",
+            name="ck_analysis_stage",
+        ),
+        CheckConstraint("document_count > 0", name="ck_analysis_document_count"),
+        CheckConstraint(
+            "completed_document_count >= 0 and failed_document_count >= 0",
+            name="ck_analysis_document_counts",
+        ),
+        UniqueConstraint(
+            "team_id",
+            "created_by_id",
+            "idempotency_key",
+            name="uq_analysis_idempotency",
+        ),
+        UniqueConstraint(
+            "team_id",
+            "knowledge_base_id",
+            "id",
+            "created_by_id",
+            name="uq_analysis_task_owner_scope",
+        ),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "source_task_id", "created_by_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_analysis_source_task_owner",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(30), default="queued")
+    idempotency_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    source_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_detail: Mapped[str | None] = mapped_column(String(500))
+    document_count: Mapped[int] = mapped_column(Integer)
+    completed_document_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_document_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnalysisField(Base):
+    __tablename__ = "analysis_fields"
+    __table_args__ = (
+        CheckConstraint(
+            "value_type in ('text', 'number', 'date', 'text_list')",
+            name="ck_analysis_field_type",
+        ),
+        UniqueConstraint("task_id", "ordinal", name="uq_analysis_field_ordinal"),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "task_id", "owner_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_analysis_field_task_owner",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE")
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE")
+    )
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    ordinal: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(80))
+    description: Mapped[str] = mapped_column(String(500))
+    value_type: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnalysisDocument(Base):
+    __tablename__ = "analysis_documents"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('queued', 'running', 'succeeded', 'failed')",
+            name="ck_analysis_document_status",
+        ),
+        CheckConstraint(
+            "attempts >= 0 and max_attempts > 0 and processed_chunk_count >= 0 "
+            "and expected_chunk_count >= 0 and model_calls >= 0",
+            name="ck_analysis_document_counts",
+        ),
+        UniqueConstraint("task_id", "document_id", name="uq_analysis_document"),
+        UniqueConstraint("task_id", "ordinal", name="uq_analysis_document_ordinal"),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "task_id", "owner_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_analysis_document_task_owner",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_id", "team_id"],
+            ["documents.id", "documents.team_id"],
+            name="fk_analysis_document_source_team",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE")
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE")
+    )
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    expected_chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    processed_chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    # 实际使用的供应商/模型与提示词、输出 schema 版本，用于区分替身与真实结果。
+    provider: Mapped[str | None] = mapped_column(String(40))
+    model: Mapped[str | None] = mapped_column(String(120))
+    prompt_version: Mapped[str | None] = mapped_column(String(40))
+    schema_version: Mapped[str | None] = mapped_column(String(40))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_detail: Mapped[str | None] = mapped_column(String(500))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AnalysisFieldResult(Base):
+    __tablename__ = "analysis_field_results"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('extracted', 'not_mentioned', 'needs_review', 'failed')",
+            name="ck_analysis_result_status",
+        ),
+        UniqueConstraint("document_execution_id", "field_id", name="uq_analysis_field_result"),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "task_id", "owner_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_analysis_result_task_owner",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_execution_id", "task_id"],
+            ["analysis_documents.id", "analysis_documents.task_id"],
+            name="fk_analysis_result_document",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["field_id", "task_id"],
+            ["analysis_fields.id", "analysis_fields.task_id"],
+            name="fk_analysis_result_field",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    document_execution_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    field_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(String(20))
+    value_text: Mapped[str | None] = mapped_column(Text)
+    value_number: Mapped[float | None] = mapped_column(Numeric(30, 10))
+    value_date: Mapped[date | None] = mapped_column(Date)
+    value_list: Mapped[list[str] | None] = mapped_column(JSONB)
+    raw_value: Mapped[str | None] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    date_precision: Mapped[str | None] = mapped_column(String(20))
+    note: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnalysisConclusion(Base):
+    __tablename__ = "analysis_conclusions"
+    __table_args__ = (
+        CheckConstraint(
+            "kind in ('common', 'difference', 'needs_review')",
+            name="ck_analysis_conclusion_kind",
+        ),
+        UniqueConstraint("task_id", "ordinal", name="uq_analysis_conclusion_ordinal"),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "task_id", "owner_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_analysis_conclusion_task_owner",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["field_id", "task_id"],
+            ["analysis_fields.id", "analysis_fields.task_id"],
+            name="fk_analysis_conclusion_field",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    field_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    kind: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str] = mapped_column(Text)
+    document_ids: Mapped[list[str]] = mapped_column(JSONB)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnalysisSummary(Base):
+    """对比任务的汇总阶段；只有全部逐文档提取完成后才创建和领取。"""
+
+    __tablename__ = "analysis_summaries"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('queued', 'running', 'succeeded', 'failed')",
+            name="ck_analysis_summary_status",
+        ),
+        CheckConstraint("attempts >= 0 and max_attempts > 0", name="ck_analysis_summary_counts"),
+        UniqueConstraint("task_id", name="uq_analysis_summary_task"),
+        UniqueConstraint(
+            "id",
+            "team_id",
+            "knowledge_base_id",
+            "task_id",
+            "owner_id",
+            name="uq_analysis_summary_scope",
+        ),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "task_id", "owner_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_analysis_summary_task_owner",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            [
+                "document_execution_id",
+                "team_id",
+                "knowledge_base_id",
+                "task_id",
+                "owner_id",
+            ],
+            [
+                "analysis_documents.id",
+                "analysis_documents.team_id",
+                "analysis_documents.knowledge_base_id",
+                "analysis_documents.task_id",
+                "analysis_documents.owner_id",
+            ],
+            name="fk_analysis_summary_document_scope",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    document_execution_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider: Mapped[str | None] = mapped_column(String(40))
+    model: Mapped[str | None] = mapped_column(String(120))
+    prompt_version: Mapped[str | None] = mapped_column(String(40))
+    schema_version: Mapped[str | None] = mapped_column(String(40))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_detail: Mapped[str | None] = mapped_column(String(500))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AnalysisCitation(Base):
+    __tablename__ = "analysis_citations"
+    __table_args__ = (
+        CheckConstraint(
+            "(field_result_id is not null) <> (conclusion_id is not null)",
+            name="ck_analysis_citation_one_target",
+        ),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "task_id", "owner_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_analysis_citation_task_owner",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_execution_id", "task_id"],
+            ["analysis_documents.id", "analysis_documents.task_id"],
+            name="fk_analysis_citation_document",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["chunk_id", "document_id", "team_id"],
+            [
+                "document_chunks.id",
+                "document_chunks.document_id",
+                "document_chunks.team_id",
+            ],
+            name="fk_analysis_citation_chunk_team",
+            ondelete="SET NULL",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    document_execution_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    field_result_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    conclusion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    ordinal: Mapped[int] = mapped_column(Integer)
+    locator_label: Mapped[str] = mapped_column(String(200))
+    excerpt: Mapped[str] = mapped_column(Text)
+    source_fingerprint: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

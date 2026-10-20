@@ -37,9 +37,7 @@ router = APIRouter(
     tags=["conversations"],
 )
 settings = get_settings()
-answer_limiter = FixedWindowLimiter(
-    settings.ask_rate_limit, settings.ask_rate_window_seconds
-)
+answer_limiter = FixedWindowLimiter(settings.ask_rate_limit, settings.ask_rate_window_seconds)
 
 
 def _close_stale_turns(session: Session, conversation_id: uuid.UUID) -> None:
@@ -201,9 +199,7 @@ def ask_in_conversation_stream(
         from app.db import SessionLocal
 
         with SessionLocal() as stream_session:
-            apply_context(
-                stream_session, user_id=context.user.id, team_id=context.team.id
-            )
+            apply_context(stream_session, user_id=context.user.id, team_id=context.team.id)
             try:
                 for event in stream_answer(
                     stream_session,

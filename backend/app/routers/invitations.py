@@ -166,9 +166,7 @@ def preview_invitation(
 ) -> InvitationPreviewOut:
     enforce_rate_limit(redeem_limiter, f"preview:{_client_ip(request)}")
     row = session.execute(
-        text(
-            "select status, team_name, email from app_preview_invitation(:token_hash)"
-        ),
+        text("select status, team_name, email from app_preview_invitation(:token_hash)"),
         {"token_hash": hash_session_token(payload.token)},
     ).one_or_none()
     if row is None:
@@ -294,9 +292,7 @@ def accept_invitation(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> MeOut:
-    outcome, _team_id, _team_name, _role = _accept(
-        session, payload.token, user.id, user.email
-    )
+    outcome, _team_id, _team_name, _role = _accept(session, payload.token, user.id, user.email)
     if outcome != "ok":
         session.rollback()
         raise _reject_invitation(outcome)
