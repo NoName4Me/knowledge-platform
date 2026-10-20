@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type TeamInvitation, type TeamMember } from "../lib/api";
 import { Icon } from "./Icon";
+import { SelectMenu } from "./Popover";
 
 type Props = {
   teamId: string;
@@ -126,14 +127,16 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
               onChange={(event) => setEmail(event.target.value)}
               required
             />
-            <select
-              aria-label="成员角色"
+            <SelectMenu
+              className="invite-role-select"
+              label="成员角色"
               value={role}
-              onChange={(event) => setRole(event.target.value as "admin" | "member")}
-            >
-              <option value="member">成员</option>
-              <option value="admin">管理员</option>
-            </select>
+              onChange={(value) => setRole(value as "admin" | "member")}
+              options={[
+                { id: "member", label: "成员" },
+                { id: "admin", label: "管理员" },
+              ]}
+            />
             <button className="btn" disabled={inviting || !email.trim()}>
               {inviting ? "生成中…" : "生成邀请"}
             </button>

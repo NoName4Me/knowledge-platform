@@ -3,6 +3,7 @@ import { InvitePage } from "./pages/InvitePage";
 import { LoginPage } from "./pages/LoginPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import "./styles/app.css";
+import "./styles/workbench.css";
 
 function Routes() {
   const { status } = useAuth();

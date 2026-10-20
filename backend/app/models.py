@@ -11,12 +11,14 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -101,12 +103,57 @@ class KnowledgeBase(Base):
     team: Mapped[Team] = relationship(back_populates="knowledge_bases")
 
 
+class DocumentFolder(Base):
+    __tablename__ = "document_folders"
+    __table_args__ = (
+        UniqueConstraint("parent_id", "name", name="uq_folder_parent_name"),
+        UniqueConstraint("id", "knowledge_base_id", "team_id", name="uq_folder_scope"),
+        Index(
+            "uq_folder_tree_name",
+            "knowledge_base_id",
+            text("coalesce(parent_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            "name",
+            unique=True,
+        ),
+        ForeignKeyConstraint(
+            ["parent_id", "knowledge_base_id", "team_id"],
+            [
+                "document_folders.id",
+                "document_folders.knowledge_base_id",
+                "document_folders.team_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_folder_parent_scope",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "team_id"],
+            ["knowledge_bases.id", "knowledge_bases.team_id"],
+            ondelete="CASCADE",
+            name="fk_folder_kb_team",
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
         CheckConstraint(
             "status in ('uploading', 'pending', 'processing', 'ready', 'failed', 'deleted')",
             name="ck_document_status",
+        ),
+        ForeignKeyConstraint(
+            ["folder_id", "knowledge_base_id", "team_id"],
+            [
+                "document_folders.id",
+                "document_folders.knowledge_base_id",
+                "document_folders.team_id",
+            ],
+            name="fk_document_folder_scope",
         ),
         UniqueConstraint("id", "team_id", name="uq_document_id_team"),
         ForeignKeyConstraint(
@@ -127,6 +174,7 @@ class Document(Base):
     uploaded_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
     title: Mapped[str] = mapped_column(String(300))
     filename: Mapped[str] = mapped_column(String(300))
     content_type: Mapped[str] = mapped_column(String(120))

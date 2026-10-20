@@ -1,101 +1,133 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthContext";
-import { api, ApiError, type DocumentItem, type KnowledgeBase, type TeamSummary } from "../lib/api";
-import { AnalysisPanel } from "../components/AnalysisPanel";
-import { AskPanel } from "../components/AskPanel";
-import { DocumentPanel } from "../components/DocumentPanel";
+import { api, ApiError, type KnowledgeBase, type TeamSummary } from "../lib/api";
+import { knowledgeBasePath, workspaceRoute } from "../lib/workspace-route";
+import { readPreference, writePreference } from "../lib/workspace-preferences";
 import { MemberDialog } from "../components/MemberDialog";
-import { TeamSidebar } from "../components/TeamSidebar";
-import { Icon } from "../components/Icon";
-const message = (err: unknown, fallback: string) => err instanceof ApiError ? err.message : fallback;
+import { NameDialog } from "../components/NameDialog";
+import { ProfileMenu } from "../components/ProfileMenu";
+import { Modal } from "../components/Modal";
+import { Brand, Icon } from "../components/Icon";
+import { PopoverMenu, SelectMenu } from "../components/Popover";
+import { KnowledgeWorkspace } from "./KnowledgeWorkspace";
 
-export function WorkspacePage() {
-  const { session, logout } = useAuth();
-  const [teamId, setTeamId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  if (!session) return null;
-  const team = session.teams.find((item) => item.id === teamId) ?? session.teams[0];
-  return <div className="workspace">
-    <a className="skip-link" href="#workspace-main">跳到工作区</a>
-    <TeamSidebar teams={session.teams} activeTeamId={team?.id ?? null} onSelect={setTeamId} userName={session.user.display_name} onLogout={() => { void logout().catch((err) => setError(message(err, "退出失败，请重试"))); }} />
-    <main id="workspace-main" className="workspace__main" tabIndex={-1}>
-      {error && <p className="error-text" role="alert">{error}</p>}
-      {team ? <TeamWorkspace key={team.id} team={team} /> : <div className="workspace__empty"><Icon name="book" size={40} /><h1>还没有加入团队</h1><p>请联系团队管理员获取邀请，加入后即可访问资料。</p></div>}
-    </main>
-  </div>;
-}
-function TeamWorkspace({ team }: { team: TeamSummary }) {
-  const [bases, setBases] = useState<KnowledgeBase[]>([]);
-  const [activeId, setActiveId] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+export type Library = KnowledgeBase & { team: TeamSummary };
+const message = (error: unknown, fallback: string) => error instanceof ApiError ? error.message : fallback;
+
+function CreateLibrary({ teams, initialTeam, onClose, onCreated }: {
+  teams: TeamSummary[]; initialTeam: string; onClose: () => void; onCreated: (library: Library) => void;
+}) {
+  const [teamId, setTeamId] = useState(teams.some((team) => team.id === initialTeam) ? initialTeam : teams[0]?.id ?? "");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
-  const [reload, setReload] = useState(0);
-  const [membersOpen, setMembersOpen] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    api.listKnowledgeBases(team.id).then((items) => { if (!cancelled) { setBases(items); setLoading(false); } }).catch((err) => { if (!cancelled) { setError(message(err, "加载知识库失败，请重试")); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, [team.id, reload]);
-  const active = bases.find((kb) => kb.id === activeId) ?? bases[0];
+  const [error, setError] = useState("");
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim() || saving) return;
-    setSaving(true);
-    try { const kb = await api.createKnowledgeBase(team.id, name.trim()); setBases((prev) => [...prev, kb]); setActiveId(kb.id); setName(""); setCreating(false); setError(null); }
+    const team = teams.find((item) => item.id === teamId);
+    if (!team || !name.trim() || saving) return;
+    setSaving(true); setError("");
+    try { const kb = await api.createKnowledgeBase(teamId, name.trim()); onCreated({ ...kb, team }); }
     catch (err) { setError(message(err, "创建知识库失败，请重试")); }
     finally { setSaving(false); }
   }
-  return <>
-    <header className="workspace__bar"><span>{team.name}<span className="breadcrumb-divider">/</span>知识库</span><span className="access-label"><Icon name="shield" size={15} /> 团队共享</span></header>
-    <div className="workspace__content">
-      <div className="workspace__heading"><div><h1>文档与问答</h1><p>整理团队资料，从原文中寻找答案。</p></div><div className="workspace__tools">
-        {bases.length > 0 && <div className="kb-picker"><label htmlFor="knowledge-base">当前知识库</label><div><Icon name="book" size={17} /><select id="knowledge-base" value={active?.id ?? ""} onChange={(e) => setActiveId(e.target.value)}>{bases.map((kb) => <option key={kb.id} value={kb.id}>{kb.name}</option>)}</select></div></div>}
-        {team.role === "admin" && <button className="btn btn--ghost" onClick={() => setMembersOpen(true)}><Icon name="shield" size={17} />成员</button>}
-        {team.role === "admin" && <button className="btn btn--ghost" onClick={() => setCreating(!creating)} aria-expanded={creating}><Icon name="plus" size={17} />新建知识库</button>}
-      </div></div>
-      {membersOpen && <MemberDialog teamId={team.id} onClose={() => setMembersOpen(false)} onError={setError} />}
-      {creating && <form className="create-form" onSubmit={create}><div className="field"><label htmlFor="kb-name">知识库名称</label><input id="kb-name" maxLength={200} value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：产品资料" required /></div><button className="btn" disabled={saving || !name.trim()}>{saving ? "创建中…" : "创建知识库"}</button><button type="button" className="btn btn--ghost" onClick={() => setCreating(false)}>取消</button></form>}
-      {error && <div className="error-banner" role="alert">{error}<button className="btn btn--ghost" onClick={() => { setError(null); setLoading(true); setReload((n) => n + 1); }}>重新加载</button></div>}
-      {loading ? <p className="workspace__note" role="status">正在加载知识库…</p> : active ? <KnowledgeWorkspace key={active.id} team={team} knowledgeBase={active} /> : !error && <div className="workspace__empty"><Icon name="book" size={40} /><h2>从一个知识库开始</h2><p>{team.role === "admin" ? "创建知识库，按主题整理资料，再向资料提问。" : "管理员创建知识库后，你就可以上传资料并提问。"}</p>{team.role === "admin" && <button className="btn" onClick={() => setCreating(true)}><Icon name="plus" size={18} />新建知识库</button>}</div>}
-    </div>
-  </>;
+  return <Modal title="新建知识库" busy={saving} onClose={onClose}><form onSubmit={(event) => void create(event)}>
+    <div className="field"><span>所属团队</span><SelectMenu label="所属团队" value={teamId} onChange={setTeamId} disabled={saving} options={teams.map((team) => ({ id: team.id, label: team.name }))} /></div>
+    <label className="field"><span>知识库名称</span><input autoFocus required maxLength={200} placeholder="例如：产品资料、团队制度" value={name} onChange={(event) => setName(event.target.value)} disabled={saving} /></label>
+    {error && <p role="alert" className="error-text">{error}</p>}
+    <div className="maintenance-actions"><button type="button" className="btn btn--ghost" disabled={saving} onClick={onClose}>取消</button><button className="btn" disabled={saving || !name.trim() || !teamId}>{saving ? "创建中…" : "创建并进入"}</button></div>
+  </form></Modal>;
 }
-function KnowledgeWorkspace({ team, knowledgeBase }: { team: TeamSummary; knowledgeBase: KnowledgeBase }) {
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+
+function LibraryMenu({ library, onRename, onDelete, busy }: {
+  library: Library; onRename: () => void; onDelete: () => void; busy: boolean;
+}) {
+  return <PopoverMenu label={`管理知识库 ${library.name}`} className="library-menu" trigger={<Icon name="more" size={20} />}>
+    {(close) => <>
+      <button type="button" role="menuitem" disabled={busy} onClick={() => { close(); onRename(); }}>重命名知识库</button>
+      <button type="button" role="menuitem" className="is-danger" disabled={busy} onClick={() => { close(); onDelete(); }}>删除知识库</button>
+    </>}
+  </PopoverMenu>;
+}
+
+export function WorkspacePage() {
+  const { session } = useAuth();
+  const route = workspaceRoute(window.location.pathname);
+  const [libraries, setLibraries] = useState<Library[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"ask" | "analysis">("ask");
-  const refresh = useCallback(async () => { setDocuments(await api.listDocuments(team.id, knowledgeBase.id)); }, [team.id, knowledgeBase.id]);
-  const processing = documents.some((doc) => doc.status === "pending" || doc.status === "processing");
+  const [teamErrors, setTeamErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [creating, setCreating] = useState(false);
+  const [renaming, setRenaming] = useState<Library | null>(null);
+  const [managingTeam, setManagingTeam] = useState<TeamSummary | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [teamFilter, setTeamFilter] = useState("all");
+  const [query, setQuery] = useState("");
   useEffect(() => {
+    if (!session) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function load() {
-      let shouldPoll = processing;
-      try { const items = await api.listDocuments(team.id, knowledgeBase.id); shouldPoll = items.some((doc) => doc.status === "pending" || doc.status === "processing"); if (!cancelled) { setDocuments(items); } }
-      catch (err) { if (!cancelled) setError(message(err, "加载资料失败，请重试")); }
-      finally { if (!cancelled) { setLoading(false); if (shouldPoll) timer = setTimeout(() => void load(), 3000); } }
-    }
-    void load();
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [team.id, knowledgeBase.id, processing]);
-  return <>
-    {error && <p className="error-text" role="alert">{error}</p>}
-    <div className="workspace-modebar">
-      <div className="workspace-modebar__modes" aria-label="工作模式">
-        <button type="button" aria-pressed={mode === "ask"} onClick={() => setMode("ask")}>问答</button>
-        <button type="button" aria-pressed={mode === "analysis"} onClick={() => setMode("analysis")}>分析</button>
-      </div>
-      <p><Icon name="book" size={14} />{team.name}<span>/</span>{knowledgeBase.name}</p>
-      {mode === "analysis" && <span className="workspace-modebar__privacy"><Icon name="shield" size={14} />仅本人可见</span>}
-    </div>
-    <div className="workspace__panels">
-      <DocumentPanel teamId={team.id} knowledgeBaseId={knowledgeBase.id} documents={documents} loading={loading} canDelete={team.role === "admin"} onChanged={refresh} onError={setError} />
-      {mode === "ask" ? <AskPanel teamId={team.id} knowledgeBaseId={knowledgeBase.id} canAsk={documents.some((doc) => doc.status === "ready")} processing={processing} onError={setError} /> : <AnalysisPanel key={`${team.id}:${knowledgeBase.id}`} teamId={team.id} teamName={team.name} knowledgeBaseId={knowledgeBase.id} knowledgeBaseName={knowledgeBase.name} documents={documents} onError={setError} />}
-    </div>
-    <p className="workspace__footnote"><Icon name="quote" size={14} /> {mode === "ask" ? "回答供参考，请结合引用原文核对。" : "提取结果与判断请结合原文依据核对。"}</p>
-  </>;
+    Promise.allSettled(session.teams.map((team) => api.listKnowledgeBases(team.id))).then((results) => {
+      if (cancelled) return;
+      const items: Library[] = []; const errors: Record<string, string> = {};
+      results.forEach((result, index) => {
+        const team = session.teams[index];
+        if (result.status === "fulfilled") items.push(...result.value.map((kb) => ({ ...kb, team })));
+        else errors[team.id] = message(result.reason, "知识库加载失败，请重试");
+      });
+      setLibraries(items); setTeamErrors(errors); setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [session, revision]);
+  if (!session) return null;
+  const active = route.kind === "knowledge" ? libraries.find((kb) => kb.id === route.knowledgeBaseId && kb.team.id === route.teamId) : undefined;
+  const adminTeams = session.teams.filter((team) => team.role === "admin");
+  const visible = libraries.filter((kb) => (teamFilter === "all" || kb.team.id === teamFilter) && `${kb.name} ${kb.team.name}`.toLowerCase().includes(query.toLowerCase()));
+  const lastTeam = readPreference(`${session.user.id}:team`);
+  function enter(kb: Library) {
+    writePreference(`${session!.user.id}:team`, kb.team.id);
+    writePreference(`${session!.user.id}:${kb.team.id}:knowledge-base`, kb.id);
+    window.location.assign(knowledgeBasePath(kb.team.id, kb.id));
+  }
+  function reload() { setLoading(true); setRevision((value) => value + 1); }
+  async function deleteLibrary(kb: Library) {
+    if (deleting || !window.confirm(`永久删除知识库“${kb.name}”？\n\n其中的资料、目录、问答记录和分析结果都会一并清理，且无法恢复。`)) return;
+    setDeleting(kb.id); setError("");
+    try {
+      await api.deleteKnowledgeBase(kb.team.id, kb.id);
+      if (active?.id === kb.id) window.location.assign("/");
+      else setLibraries((items) => items.filter((item) => item.id !== kb.id));
+    } catch (err) { setError(message(err, "删除知识库失败，请重试")); }
+    finally { setDeleting(null); }
+  }
+  const management = (kb: Library) => kb.team.role === "admin" ? <LibraryMenu library={kb} busy={deleting !== null} onRename={() => setRenaming(kb)} onDelete={() => void deleteLibrary(kb)} /> : null;
+  return <div className="workbench">
+    <a className="skip-link" href="#workspace-main">跳到工作区</a>
+    <header className="workbench-header">
+      {route.kind === "home" ? <a className="workbench-brand" href="/" aria-label="知识工作台首页"><Brand /></a> : <div className="library-heading"><a className="home-return" href="/" aria-label="返回首页" title="返回首页"><Icon name="back" size={19} /></a><span className="header-separator" />
+        <div className="library-switch"><SelectMenu
+          className="library-switch__control"
+          label="切换知识库"
+          value={active?.id ?? ""}
+          disabled={loading || !active}
+          placeholder={loading ? "正在加载知识库…" : "知识库不可访问"}
+          options={libraries.map((kb) => ({ id: kb.id, label: kb.name, group: kb.team.name }))}
+          onChange={(id) => { const kb = libraries.find((item) => item.id === id); if (kb) enter(kb); }}
+        /><small>{active?.team.name ?? ""}</small></div>{active && management(active)}</div>}
+      <ProfileMenu />
+    </header>
+    {error && <div className="workbench-error" role="alert"><span>{error}</span><button className="icon-button" type="button" onClick={() => setError("")} aria-label="关闭错误提示"><Icon name="close" size={16} /></button></div>}
+    {route.kind === "home" ? <main id="workspace-main" className="home-page" tabIndex={-1}>
+      <div className="home-intro"><div><h1>我的工作台</h1><p>从一份资料开始，把问题带进知识库。</p></div>{adminTeams.length > 0 && <button className="btn" type="button" onClick={() => setCreating(true)}><Icon name="plus" size={17} />新建知识库</button>}</div>
+      <div className="home-layout"><section className="home-libraries" aria-labelledby="home-libraries-title">
+        <div className="home-section-heading"><h2 id="home-libraries-title">知识库 <span>{libraries.length}</span></h2><div className="home-filters"><SelectMenu className="home-filter-select" label="按团队筛选" value={teamFilter} onChange={setTeamFilter} options={[{ id: "all", label: "全部团队" }, ...session.teams.map((team) => ({ id: team.id, label: team.name }))]} /><label className="sr-only" htmlFor="library-search">搜索知识库</label><input id="library-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索知识库" /></div></div>
+        {Object.entries(teamErrors).map(([id, value]) => <p className="error-text home-load-error" key={id} role="alert">{session.teams.find((team) => team.id === id)?.name}：{value}<button type="button" className="btn btn--ghost" onClick={reload}>重试</button></p>)}
+        {loading ? <p className="home-empty" role="status">正在加载知识库…</p> : visible.length ? <div className="library-grid">{visible.map((kb) => <article className="library-card" key={kb.id}><div className="library-card__top"><span className="library-emblem"><Icon name="book" size={24} /></span>{management(kb)}</div><a className="library-card__link" href={knowledgeBasePath(kb.team.id, kb.id)}><h3>{kb.name}</h3><p>{kb.team.name}</p><span>进入知识库 <Icon name="external" size={13} /></span></a></article>)}</div> : <div className="home-empty"><Icon name="book" size={30} /><h3>{query ? "没有匹配的知识库" : "还没有知识库"}</h3><p>{query ? "换个名称或团队试试。" : adminTeams.length ? "创建知识库，上传资料后即可开始问答与分析。" : "管理员创建知识库后，会显示在这里。"}</p></div>}
+      </section><section className="home-teams" aria-labelledby="home-teams-title"><div className="home-section-heading"><h2 id="home-teams-title">团队 <span>{session.teams.length}</span></h2></div>
+        <ul>{session.teams.map((team) => <li key={team.id}><span className="team-emblem">{team.name.slice(0, 1)}</span><div><h3>{team.name}</h3><p>{team.role === "admin" ? "管理员" : "团队成员"}</p><div className="home-team-actions"><button type="button" onClick={() => setTeamFilter(team.id)}>查看知识库</button>{team.role === "admin" && <button type="button" onClick={() => setManagingTeam(team)}>管理成员</button>}</div></div></li>)}</ul>{session.teams.length === 0 && <p className="home-empty">尚未加入团队，请联系管理员获取邀请。</p>}
+      </section></div>
+    </main> : loading ? <main className="workbench-loading" id="workspace-main" role="status">正在进入知识库…</main> : active ? <KnowledgeWorkspace key={`${active.team.id}:${active.id}`} library={active} /> : <main className="workbench-loading" id="workspace-main"><Icon name="book" size={32} /><h1>无法进入这个知识库</h1><p>{route.kind === "knowledge" && teamErrors[route.teamId] ? teamErrors[route.teamId] : "知识库不存在、已删除，或你已不属于对应团队。"}</p><div><a className="btn btn--ghost" href="/">返回首页</a><button className="btn" type="button" onClick={reload}>重新加载</button></div></main>}
+    {creating && <CreateLibrary teams={adminTeams} initialTeam={teamFilter !== "all" ? teamFilter : lastTeam} onClose={() => setCreating(false)} onCreated={enter} />}
+    {renaming && <NameDialog title="重命名知识库" label="知识库名称" initial={renaming.name} onClose={() => setRenaming(null)} onSave={async (name) => { const updated = await api.renameKnowledgeBase(renaming.team.id, renaming.id, name); setLibraries((items) => items.map((kb) => kb.id === updated.id ? { ...kb, ...updated } : kb)); }} />}
+    {managingTeam && <MemberDialog teamId={managingTeam.id} onClose={() => setManagingTeam(null)} onError={setError} />}
+  </div>;
 }

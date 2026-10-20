@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.csrf import CsrfMiddleware
 from app.observability import RequestLogMiddleware
-from app.routers import analysis, ask, auth, conversations, documents, invitations, teams
+from app.routers import analysis, ask, auth, conversations, documents, folders, invitations, teams
 
 settings = get_settings()
 
@@ -29,6 +29,7 @@ app.include_router(documents.router)
 app.include_router(ask.router)
 app.include_router(conversations.router)
 app.include_router(analysis.router)
+app.include_router(folders.router)
 
 
 @app.get("/api/health")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -14,13 +15,14 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import TeamContext, get_team_context, require_admin
 from app.config import get_settings
 from app.db import apply_context, get_session
-from app.models import Document, KnowledgeBase
+from app.models import Document, DocumentFolder, KnowledgeBase
 from app.reconciliation import retry_failed_upload
 from app.schemas import DocumentOut
 from app.storage import get_object_store
@@ -70,11 +72,24 @@ async def upload_document(
     team_id: uuid.UUID,
     knowledge_base_id: uuid.UUID = Form(...),
     file: UploadFile = File(...),
+    folder_id: uuid.UUID | None = Form(default=None),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> Response:
     _get_knowledge_base(session, context.team.id, knowledge_base_id)
+    if folder_id is not None:
+        folder = session.scalar(
+            select(DocumentFolder)
+            .where(
+                DocumentFolder.id == folder_id,
+                DocumentFolder.team_id == context.team.id,
+                DocumentFolder.knowledge_base_id == knowledge_base_id,
+            )
+            .with_for_update()
+        )
+        if folder is None:
+            raise HTTPException(404, "目标文件夹不存在或不属于当前知识库")
 
     if idempotency_key is None:
         raise HTTPException(status_code=422, detail="缺少 Idempotency-Key")
@@ -111,6 +126,7 @@ async def upload_document(
             filename=filename,
             content_type=SUPPORTED_TYPES[extension],
             data=data,
+            folder_id=folder_id,
         )
     except QuotaExceeded as exc:
         session.rollback()
@@ -173,7 +189,9 @@ def download_document(
     return Response(
         content=data,
         media_type=document.content_type,
-        headers={"Content-Disposition": f'inline; filename="{document.filename}"'},
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(document.filename, safe='')}"
+        },
     )
 
 
@@ -221,3 +239,54 @@ def delete_document(
     apply_context(session, user_id=context.user.id, team_id=context.team.id)
     release_quota_once(session, context.team.id, document)
     session.commit()
+
+
+class DocumentUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    filename: str | None = Field(
+        default=None, min_length=1, max_length=300, pattern=r"^[^/\\\x00-\x1f]+$"
+    )
+    folder_id: uuid.UUID | None = None
+
+
+@router.patch("/{document_id}", response_model=DocumentOut)
+def update_document(
+    document_id: uuid.UUID,
+    payload: DocumentUpdate,
+    context: TeamContext = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> DocumentOut:
+    document = session.scalar(
+        select(Document)
+        .where(
+            Document.id == document_id,
+            Document.team_id == context.team.id,
+            Document.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if document is None:
+        raise HTTPException(404, "文档不存在")
+    if "filename" in payload.model_fields_set:
+        if payload.filename is None:
+            raise HTTPException(422, "资料名称不能为空")
+        if extension_lower(payload.filename) != extension_lower(document.filename):
+            raise HTTPException(422, "重命名时不能修改文件扩展名")
+        document.filename = payload.filename
+        document.title = payload.filename.rsplit(".", 1)[0]
+    if "folder_id" in payload.model_fields_set:
+        if payload.folder_id is not None:
+            folder = session.scalar(
+                select(DocumentFolder)
+                .where(
+                    DocumentFolder.id == payload.folder_id,
+                    DocumentFolder.team_id == context.team.id,
+                    DocumentFolder.knowledge_base_id == document.knowledge_base_id,
+                )
+                .with_for_update()
+            )
+            if folder is None:
+                raise HTTPException(404, "目标文件夹不存在或不属于当前知识库")
+        document.folder_id = payload.folder_id
+    session.commit()
+    return DocumentOut.model_validate(document)

@@ -14,6 +14,8 @@ os.environ.setdefault("KP_STORAGE_BACKEND", "local")
 os.environ.setdefault("KP_EMBEDDING_BASE_URL", "")
 os.environ.setdefault("KP_ANSWER_BASE_URL", "")
 os.environ.setdefault("KP_ANSWER_API_KEY", "")
+os.environ.setdefault("KP_ANALYSIS_MODEL_BASE_URL", "")
+os.environ.setdefault("KP_ANALYSIS_MODEL_API_KEY", "")
 
 from app.db import configure_engine
 
@@ -63,7 +65,7 @@ def session() -> Iterator[Session]:
         conn.execute(
             text(
                 "TRUNCATE users, teams, team_memberships, knowledge_bases, session_tokens, "
-                "documents, document_chunks, processing_tasks, team_quotas, "
+                "documents, document_folders, document_chunks, processing_tasks, team_quotas, "
                 "upload_requests, conversations, turns, citations, "
                 "analysis_citations, analysis_conclusions, analysis_field_results, "
                 "analysis_documents, analysis_fields, analysis_tasks CASCADE"

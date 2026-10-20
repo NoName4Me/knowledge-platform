@@ -100,10 +100,15 @@ def _citation_items(session: Session, turn: Turn) -> list[Citation]:
         .order_by(CitationRecord.ordinal)
     ).all()
     items: list[Citation] = []
-    for citation, document in rows:
+    # 历史记录按使用顺序压缩保存 ordinal；正文可能实际使用 [2]、[5]。
+    # 从同一份已保存正文恢复真实编号，保证抽屉和上标一一对应。
+    references = sorted({int(value) for value in re.findall(r"\[(\d+)\]", turn.answer or "")})
+    for index, (citation, document) in enumerate(rows):
+        number = references[index] if len(references) == len(rows) else citation.ordinal
         if document.status == "deleted":
             items.append(
                 Citation(
+                    number=number,
                     document_id=citation.document_id,
                     document_title=citation.filename_snapshot,
                     locator_label=citation.locator_label_snapshot,
@@ -122,6 +127,7 @@ def _citation_items(session: Session, turn: Turn) -> list[Citation]:
                 )
             items.append(
                 Citation(
+                    number=number,
                     document_id=citation.document_id,
                     document_title=document.title,
                     locator_label=citation.locator_label_snapshot,

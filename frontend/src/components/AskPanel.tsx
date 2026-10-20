@@ -5,7 +5,11 @@ import {
   type Conversation,
   type Turn,
 } from "../lib/api";
+import { AnswerWithEvidence, StreamingAnswer } from "./AnswerWithEvidence";
+import { turnEvidence } from "../lib/citation-text";
+import { useEvidence } from "../lib/evidence-context";
 import { Icon } from "./Icon";
+import { SelectMenu } from "./Popover";
 
 type Props = {
   teamId: string;
@@ -31,6 +35,7 @@ export function AskPanel({
   processing,
   onError,
 }: Props) {
+  const evidence = useEvidence();
   const [question, setQuestion] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -209,27 +214,30 @@ export function AskPanel({
         <span className="panel__subtitle">回答附原文依据</span>
       </div>
       <div className="conversation-bar">
-        <label htmlFor="conversation-select" className="sr-only">选择会话</label>
         <Icon name="quote" size={15} />
-        <select
-          id="conversation-select"
+        <SelectMenu
+          className="conversation-select"
+          label="选择会话"
           value={activeId ?? "draft"}
-          onChange={(event) =>
-            setActiveId(event.target.value === "draft" ? null : event.target.value)
-          }
+          onChange={(value) => {
+            evidence.close();
+            setActiveId(value === "draft" ? null : value);
+            setTurns([]);
+          }}
           disabled={busy || loadingConversations || loadingTurns}
-        >
-          {activeId === null && <option value="draft">新对话</option>}
-          {conversations.map((conversation) => (
-            <option key={conversation.id} value={conversation.id}>
-              {conversation.title}
-            </option>
-          ))}
-        </select>
+          options={[
+            ...(activeId === null ? [{ id: "draft", label: "新对话" }] : []),
+            ...conversations.map((conversation) => ({
+              id: conversation.id,
+              label: conversation.title,
+            })),
+          ]}
+        />
         <button
           className="icon-button"
           type="button"
           onClick={() => {
+            evidence.close();
             setActiveId(null);
             setTurns([]);
             inputRef.current?.focus();
@@ -240,10 +248,6 @@ export function AskPanel({
         >
           <Icon name="plus" size={16} />
         </button>
-        <span className="conversation-bar__privacy">
-          <Icon name="shield" size={13} />
-          仅本人可见
-        </span>
       </div>
 
       {loadingConversations || (loadingTurns && turns.length === 0) ? (
@@ -293,9 +297,7 @@ export function AskPanel({
                 <div className="turn__content">
                   {turn.status === "answering" ? (
                     turn.answer_draft ? (
-                      <p className="turn__answer" aria-live="polite">
-                        {turn.answer_draft}
-                      </p>
+                      <StreamingAnswer text={turn.answer_draft} />
                     ) : (
                       <p className="turn__pending" role="status">正在检索资料并生成回答…</p>
                     )
@@ -316,34 +318,14 @@ export function AskPanel({
                     </div>
                   ) : (
                     <>
-                      <p className="turn__answer">{turn.answer}</p>
-                      {turn.citations.length > 0 ? (
-                        <div className="answer-sources">
-                          <h3>
-                            <Icon name="quote" size={15} />
-                            原文依据 <span>{turn.citations.length}</span>
-                          </h3>
-                          <ol className="citation-list">
-                            {turn.citations.map((citation, index) => (
-                              <li key={`${turn.id}-${citation.document_id}-${index}`}>
-                                <details className="citation" open>
-                                  <summary>
-                                    <span className="citation__number">{index + 1}</span>
-                                    <span className="citation__source">
-                                      {citation.document_title}
-                                      <span>{citation.locator_label}</span>
-                                    </span>
-                                    <Icon name="chevron" size={16} />
-                                  </summary>
-                                  <blockquote>
-                                    {citation.excerpt || "原始资料已删除，保留引用来源信息。"}
-                                  </blockquote>
-                                </details>
-                              </li>
-                            ))}
-                          </ol>
-                        </div>
-                      ) : turn.status === "insufficient" ? (
+                      <AnswerWithEvidence turn={turn} loadSources={async () => {
+                        if (!activeId) return [];
+                        const currentTurns = await api.listTurns(teamId, knowledgeBaseId, activeId);
+                        const current = currentTurns.find((item) => item.id === turn.id);
+                        if (!current) throw new Error("这条回答已不可访问，请重新加载会话");
+                        return turnEvidence(current);
+                      }} />
+                      {turn.citations.length === 0 && turn.status === "insufficient" ? (
                         <p className="turn__insufficient">
                           没有找到可引用的资料，请补充相关文档或调整问题。
                         </p>

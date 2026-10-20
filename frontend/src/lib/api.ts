@@ -42,6 +42,13 @@ export type KnowledgeBase = {
   name: string;
 };
 
+export type DocumentFolder = {
+  id: string;
+  knowledge_base_id: string;
+  parent_id: string | null;
+  name: string;
+};
+
 export type TeamMember = {
   user_id: string;
   email: string;
@@ -67,6 +74,7 @@ export type InvitationPreview = {
 export type DocumentStatus = "uploading" | "pending" | "processing" | "ready" | "failed" | "deleted";
 
 export type DocumentItem = {
+  folder_id: string | null;
   id: string;
   knowledge_base_id: string;
   title: string;
@@ -78,6 +86,7 @@ export type DocumentItem = {
 };
 
 export type Citation = {
+  number?: number | null;
   document_id: string;
   document_title: string;
   locator_label: string;
@@ -239,6 +248,22 @@ export const api = {
       `/api/teams/${teamId}/knowledge-bases`,
       jsonInit(FORM_METHOD, { name }),
     ),
+  renameKnowledgeBase: (teamId: string, kbId: string, name: string) =>
+    writeRequest<KnowledgeBase>(`/api/teams/${teamId}/knowledge-bases/${kbId}`, jsonInit("PATCH", { name })),
+  deleteKnowledgeBase: (teamId: string, kbId: string) =>
+    writeRequest<void>(`/api/teams/${teamId}/knowledge-bases/${kbId}`, { method: "DELETE" }),
+  listFolders: (teamId: string, kbId: string) =>
+    request<DocumentFolder[]>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders`),
+  createFolder: (teamId: string, kbId: string, name: string, parentId: string | null = null) =>
+    writeRequest<DocumentFolder>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders`, jsonInit("POST", { name, parent_id: parentId })),
+  renameFolder: (teamId: string, kbId: string, folderId: string, name: string) =>
+    writeRequest<DocumentFolder>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders/${folderId}`, jsonInit("PATCH", { name })),
+  moveFolder: (teamId: string, kbId: string, folderId: string, parentId: string | null) =>
+    writeRequest<DocumentFolder>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders/${folderId}/parent`, jsonInit("PATCH", { parent_id: parentId })),
+  deleteFolder: (teamId: string, kbId: string, folderId: string) =>
+    writeRequest<void>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders/${folderId}`, { method: "DELETE" }),
+  updateDocument: (teamId: string, documentId: string, patch: { filename?: string; folder_id?: string | null }) =>
+    writeRequest<DocumentItem>(`/api/teams/${teamId}/documents/${documentId}`, jsonInit("PATCH", patch)),
   listMembers: (teamId: string) => request<TeamMember[]>(`/api/teams/${teamId}/members`),
   removeMember: (teamId: string, userId: string) =>
     writeRequest<void>(`/api/teams/${teamId}/members/${userId}`, { method: "DELETE" }),
@@ -273,10 +298,11 @@ export const api = {
     request<DocumentItem[]>(
       `/api/teams/${teamId}/documents?knowledge_base_id=${knowledgeBaseId}`,
     ),
-  uploadDocument: (teamId: string, knowledgeBaseId: string, file: File) => {
+  uploadDocument: (teamId: string, knowledgeBaseId: string, file: File, folderId?: string | null) => {
     const form = new FormData();
     form.append("knowledge_base_id", knowledgeBaseId);
     form.append("file", file);
+    if (folderId) form.append("folder_id", folderId);
     return writeRequest<DocumentItem>(`/api/teams/${teamId}/documents`, {
       method: FORM_METHOD,
       headers: { "Idempotency-Key": crypto.randomUUID() },

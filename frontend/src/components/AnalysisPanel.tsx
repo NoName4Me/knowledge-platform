@@ -17,7 +17,9 @@ import {
   type AnalysisTaskOut,
   type DocumentItem,
 } from "../lib/api";
+import { useEvidence, type EvidenceSource } from "../lib/evidence-context";
 import { Icon } from "./Icon";
+import { SelectMenu } from "./Popover";
 
 type Props = {
   teamId: string;
@@ -125,40 +127,31 @@ const formatResultValue = (field: AnalysisFieldResultOut): string => {
   return field.value_text || field.raw_value || "原文未给出明确值";
 };
 
-function CitationList({
-  citations,
-  label,
-}: {
-  citations: AnalysisCitationOut[];
-  label: string;
+function analysisScope(citations: AnalysisCitationOut[]): string {
+  return `analysis:${citations.map((citation) => citation.id).join(":")}`;
+}
+
+function CitationList({ citations, label, loadDetail }: {
+  citations: AnalysisCitationOut[]; label: string; loadDetail: () => Promise<AnalysisDetailOut>;
 }) {
+  const evidence = useEvidence();
   if (citations.length === 0) return null;
-  return (
-    <details className="analysis-citation-group" open>
-      <summary>
-        <span>
-          <Icon name="quote" size={15} />
-          {label}
-          <span className="analysis-citation-group__count">{citations.length}</span>
-        </span>
-        <Icon name="chevron" size={16} />
-      </summary>
-      <ol>
-        {citations.map((citation, index) => (
-          <li key={citation.id}>
-            <div className="analysis-citation__head">
-              <span>{index + 1}</span>
-              <p>
-                <strong>{citation.document_title}</strong>
-                <small>{citation.locator_label}</small>
-              </p>
-            </div>
-            <blockquote>{citation.excerpt}</blockquote>
-          </li>
-        ))}
-      </ol>
-    </details>
-  );
+  return <button type="button" className="view-evidence" aria-expanded={evidence.data?.scope === analysisScope(citations)} onClick={() => {
+    evidence.open({ scope: analysisScope(citations), title: label, load: async () => {
+      const fresh = await loadDetail();
+      if (!fresh.source_valid || fresh.task.status === "invalidated") throw new Error(fresh.invalid_reason || "来源已失效，依据不再展示");
+      const available = new Map([
+        ...fresh.results.flatMap((result) => result.fields.flatMap((field) => field.citations ?? [])),
+        ...fresh.conclusions.flatMap((conclusion) => conclusion.citations),
+      ].map((citation) => [citation.id, citation]));
+      return citations.map((item, index): EvidenceSource => {
+        const citation = available.get(item.id);
+        if (!citation) throw new Error("这组依据已不可用，请重新加载分析记录");
+        return { id: citation.id, number: index + 1, documentId: citation.document_id,
+          title: citation.document_title, locator: citation.locator_label, excerpt: citation.excerpt };
+      });
+    } });
+  }}><Icon name="quote" size={14} />查看依据<span>{citations.length}</span></button>;
 }
 
 function HistoryList({
@@ -255,12 +248,11 @@ function TaskProgress({ detail }: { detail: AnalysisDetailOut }) {
   );
 }
 
-function ResultTable({ detail }: { detail: AnalysisDetailOut }) {
+function ResultTable({ detail, loadDetail }: { detail: AnalysisDetailOut; loadDetail: () => Promise<AnalysisDetailOut> }) {
+  const evidence = useEvidence();
   const resultByDocument = new Map(
     detail.results.map((result) => [result.document_id, result]),
   );
-  const fieldsById = new Map(detail.fields.map((field) => [field.id, field]));
-
   return (
     <>
       <div
@@ -296,7 +288,7 @@ function ResultTable({ detail }: { detail: AnalysisDetailOut }) {
                     .get(document.document_id)
                     ?.fields.find((item) => item.field_id === field.id);
                   return (
-                    <td key={document.document_id}>
+                    <td key={document.document_id} className={result?.citations?.length && evidence.data?.scope === analysisScope(result.citations) ? "is-evidence-linked" : undefined}>
                       {result ? (
                         <>
                           <span
@@ -305,6 +297,7 @@ function ResultTable({ detail }: { detail: AnalysisDetailOut }) {
                             {FIELD_STATUS[result.status]}
                           </span>
                           <p>{formatResultValue(result)}</p>
+                          {(result.citations?.length ?? 0) > 0 && <CitationList citations={result.citations ?? []} label={`${field.name}的依据`} loadDetail={loadDetail} />}
                           {result.note && <small>{result.note}</small>}
                           {result.raw_value &&
                             result.raw_value !== formatResultValue(result) && (
@@ -326,39 +319,7 @@ function ResultTable({ detail }: { detail: AnalysisDetailOut }) {
           </tbody>
         </table>
       </div>
-      {detail.results.some((result) =>
-        result.fields.some((field) => (field.citations?.length ?? 0) > 0),
-      ) && (
-        <section className="analysis-evidence" aria-labelledby="analysis-evidence-heading">
-          <div className="analysis-section-heading">
-            <div>
-              <h3 id="analysis-evidence-heading">原文依据</h3>
-              <p>依据默认展开，可逐条折叠；位置与摘录均来自本次固定的资料快照。</p>
-            </div>
-          </div>
-          <div className="analysis-evidence__groups">
-            {detail.results.flatMap((result) =>
-              result.fields.map((fieldResult) => {
-                const field = fieldsById.get(fieldResult.field_id);
-                const citations = fieldResult.citations ?? [];
-                if (!field || citations.length === 0) return null;
-                return (
-                  <div key={`${result.document_id}-${fieldResult.field_id}`}>
-                    <div className="analysis-evidence__title">
-                      <strong>{field.name}</strong>
-                      <span>{result.document_title}</span>
-                    </div>
-                    <CitationList
-                      citations={citations}
-                      label={`${field.name}的依据`}
-                    />
-                  </div>
-                );
-              }),
-            )}
-          </div>
-        </section>
-      )}
+
     </>
   );
 }
@@ -372,7 +333,8 @@ const CONCLUSION_LABEL: Record<
   needs_review: "待核实",
 };
 
-function ConclusionList({ detail }: { detail: AnalysisDetailOut }) {
+function ConclusionList({ detail, loadDetail }: { detail: AnalysisDetailOut; loadDetail: () => Promise<AnalysisDetailOut> }) {
+  const evidence = useEvidence();
   if (detail.conclusions.length === 0) return null;
   const fieldsById = new Map(detail.fields.map((field) => [field.id, field]));
   return (
@@ -386,7 +348,7 @@ function ConclusionList({ detail }: { detail: AnalysisDetailOut }) {
       <div className="analysis-conclusion-list">
         {detail.conclusions.map((conclusion) => (
           <article
-            className={`analysis-conclusion analysis-conclusion--${conclusion.kind}`}
+            className={`analysis-conclusion analysis-conclusion--${conclusion.kind}${evidence.data?.scope === analysisScope(conclusion.citations) ? " is-evidence-linked" : ""}`}
             key={conclusion.id}
           >
             <div className="analysis-conclusion__head">
@@ -406,6 +368,7 @@ function ConclusionList({ detail }: { detail: AnalysisDetailOut }) {
             {conclusion.citations.length > 0 && (
               <CitationList
                 citations={conclusion.citations}
+                loadDetail={loadDetail}
                 label={`${fieldsById.get(conclusion.field_id)?.name ?? "结论"}的依据`}
               />
             )}
@@ -438,11 +401,16 @@ function AnalysisDetailView({
   detail,
   canRerun,
   onRerun,
+  loadDetail,
 }: {
   detail: AnalysisDetailOut;
   canRerun: boolean;
   onRerun: () => void;
+  loadDetail: () => Promise<AnalysisDetailOut>;
 }) {
+  const evidence = useEvidence();
+  const closeEvidence = evidence.close;
+  useEffect(() => { if (!detail.source_valid) closeEvidence(); }, [detail.source_valid, closeEvidence]);
   const completed =
     detail.task.status === "completed" || detail.task.status === "partial";
   const sourceInvalid = !detail.source_valid || detail.task.status === "invalidated";
@@ -515,11 +483,11 @@ function AnalysisDetailView({
               部分资料未处理成功。成功资料的结果仍可核对，失败资料不展示半成品。
             </p>
           )}
-          <ResultTable detail={detail} />
+          <ResultTable detail={detail} loadDetail={loadDetail} />
           {detail.task.kind === "comparison" && (
             <>
               <SummaryState summary={detail.summary ?? null} />
-              <ConclusionList detail={detail} />
+              <ConclusionList detail={detail} loadDetail={loadDetail} />
             </>
           )}
         </>
@@ -536,6 +504,7 @@ export function AnalysisPanel({
   documents,
   onError,
 }: Props) {
+  const evidence = useEvidence();
   const [tasks, setTasks] = useState<AnalysisTaskOut[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -657,12 +626,14 @@ export function AnalysisPanel({
   }
 
   function selectTask(task: AnalysisTaskOut) {
+    evidence.close();
     setSelectedId(task.id);
     setSubmitError(null);
   }
 
   function rerun() {
     if (!detail) return;
+    evidence.close();
     setSourceTask({
       id: detail.task.id,
       teamId,
@@ -762,10 +733,6 @@ export function AnalysisPanel({
           <Icon name="book" size={19} />
           <h2 id="analysis-heading">信息提取</h2>
         </div>
-        <span className="analysis-panel__privacy">
-          <Icon name="shield" size={14} />
-          仅本人可见
-        </span>
       </div>
       <div className="analysis-layout">
         <HistoryList
@@ -776,14 +743,12 @@ export function AnalysisPanel({
           onSelect={selectTask}
           onMore={() => void loadHistory(true, nextCursor)}
         />
-        <div className="analysis-main">
+        <div className="analysis-main" role="region" aria-label="分析配置与结果" tabIndex={0}>
           <section className="analysis-create" aria-labelledby="analysis-create-heading">
             <div className="analysis-section-heading">
               <div>
                 <h3 id="analysis-create-heading">新建分析</h3>
-                <p>
-                  {teamName} / {knowledgeBaseName} · 结果仅创建者本人可见
-                </p>
+                <p>{teamName} / {knowledgeBaseName}</p>
               </div>
             </div>
             {readyDocuments.length === 0 ? (
@@ -906,25 +871,24 @@ export function AnalysisPanel({
                           disabled={submitting}
                         />
                       </label>
-                      <label className="analysis-field analysis-field--type">
+                      <div className="analysis-field analysis-field--type">
                         <span>类型</span>
-                        <select
+                        <SelectMenu
+                          className="analysis-field-select"
+                          label={`字段 ${index + 1} 类型`}
                           value={field.value_type}
-                          onChange={(event) =>
+                          onChange={(value) =>
                             updateField(field.key, {
-                              value_type: event.target
-                                .value as AnalysisFieldInput["value_type"],
+                              value_type: value as AnalysisFieldInput["value_type"],
                             })
                           }
                           disabled={submitting}
-                        >
-                          {VALUE_TYPES.map((type) => (
-                            <option value={type.value} key={type.value}>
-                              {type.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                          options={VALUE_TYPES.map((type) => ({
+                            id: type.value,
+                            label: type.label,
+                          }))}
+                        />
+                      </div>
                       <button
                         className="icon-button analysis-field-row__remove"
                         type="button"
@@ -991,6 +955,7 @@ export function AnalysisPanel({
           ) : detail ? (
             <AnalysisDetailView
               detail={detail}
+              loadDetail={() => api.getAnalysis(teamId, knowledgeBaseId, detail.task.id)}
               canRerun={
                 detail.task.status !== "queued" &&
                 detail.task.status !== "running" &&

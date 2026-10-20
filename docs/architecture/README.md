@@ -7,7 +7,7 @@
 - 保留模块化单体、React/TypeScript、FastAPI、PostgreSQL/pgvector、数据库持久任务及独立 worker。继续在 Mac mini 上用 Compose 交付。
 - **文档团队共享；问答会话和历史仅创建者可见，团队管理员也不能查看他人问答。** 用户于本轮确认。
 - 生成模型固定为 DeepSeek `deepseek-flash`（当前官方标识，DeepSeek V4.1 Flash）；嵌入固定为本机 Ollama 的 BAAI/bge-m3（1024 维）。真实凭据只从环境变量读取，测试默认使用确定性替身，真实结果单独验收。
-- 原始文件固定走 S3 兼容接口；本地开发与验收使用 OrbStack 托管的 Garage，其他本地基础服务也统一由 `~/jonge/infra` 管理，Ollama 保留本机应用。生产可在不改业务代码的前提下替换兼容供应商。CSV 等非文档场景不得复用 S3 作为查询数据库。
+- 原始文件固定走 S3 兼容接口；本地开发与验收使用 OrbStack 托管的 Garage，其他本地基础服务也统一由 `~/jonge/infra` 管理。Ollama 的启动、固定模型准备和健康检查同样纳入该基础环境，保留 macOS 本机应用与默认模型目录；项目只维护连接配置及向量兼容性要求。生产可在不改业务代码的前提下替换兼容供应商。CSV 等非文档场景不得复用 S3 作为查询数据库。
 - 中文分词、混合检索、重排以同一题集的效果决定是否引入；不默认全部建设。V2–V4 只保留扩展位置，不预建通用 Agent/工作流框架。
 - 2026-10-19 固定 60 题评测后，混合检索（向量召回 + 中英文词项召回，见 `retrieval_candidate_k`、`retrieval_distance_limit`、`retrieval_min_lexical_score`）已作为当前基线；重排仍未接入，继续由同一题集决定是否引入。
 

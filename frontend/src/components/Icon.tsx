@@ -1,7 +1,16 @@
 import type { CSSProperties, ReactNode } from "react";
 
-type IconName = "book" | "file" | "upload" | "send" | "quote" | "logout" | "chevron" | "trash" | "plus" | "shield";
+type IconName = "book" | "file" | "upload" | "send" | "quote" | "logout" | "chevron" | "trash" | "plus" | "shield" | "close" | "folder" | "home" | "more" | "external" | "user" | "back" | "check" | "edit";
 const paths: Record<IconName, ReactNode> = {
+  check: <path d="m5 12 4 4L19 6" />,
+  edit: <><path d="m4 20 4.3-1 10.8-10.8a2.1 2.1 0 0 0-3-3L5.3 16Z" /><path d="m14.8 6.5 3 3" /></>,
+  close: <path d="m6 6 12 12M18 6 6 18" />,
+  folder: <path d="M3 6h7l2 3h9v11H3Zm0 0V4h7l2 3h9v2" />,
+  home: <><path d="m3 11 9-8 9 8M5 10v11h14V10M9 21v-7h6v7" /></>,
+  more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
+  external: <><path d="M14 3h7v7M21 3 10 14M10 5H4v16h16v-6" /></>,
+  user: <><circle cx="12" cy="8" r="4" /><path d="M4 21v-2a8 8 0 0 1 16 0v2" /></>,
+  back: <path d="m10 5-7 7 7 7M3 12h18" />,
   book: <><path d="M12 5v15M3 4h5a4 4 0 0 1 4 2 4 4 0 0 1 4-2h5v15h-5a4 4 0 0 0-4 2 4 4 0 0 0-4-2H3Z" /></>,
   file: <><path d="M14 3H5v18h14V8Z" /><path d="M14 3v5h5M8 12h8M8 16h5" /></>,
   upload: <><path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6" /></>,

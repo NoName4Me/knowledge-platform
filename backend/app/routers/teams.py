@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import contextlib
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import TeamContext, get_team_context, require_admin
 from app.db import get_session
-from app.models import KnowledgeBase, TeamMembership, User
+from app.models import Document, KnowledgeBase, TeamMembership, User
 from app.schemas import MemberOut, TeamSummary
+from app.storage import get_object_store
+from app.upload_service import release_quota_once
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -21,6 +25,7 @@ class KnowledgeBaseOut(BaseModel):
 
 
 class KnowledgeBaseCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=200)
 
 
@@ -52,8 +57,56 @@ def create_knowledge_base(
 ) -> KnowledgeBaseOut:
     kb = KnowledgeBase(team_id=context.team.id, name=payload.name)
     session.add(kb)
-    session.commit()
+    _commit_kb(session)
     return KnowledgeBaseOut(id=kb.id, name=kb.name)
+
+
+def _commit_kb(session: Session) -> None:
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(409, "同一团队内已存在该名称的知识库") from exc
+
+
+@router.patch("/{team_id}/knowledge-bases/{knowledge_base_id}", response_model=KnowledgeBaseOut)
+def rename_knowledge_base(
+    knowledge_base_id: uuid.UUID,
+    payload: KnowledgeBaseCreate,
+    context: TeamContext = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> KnowledgeBaseOut:
+    kb = session.get(KnowledgeBase, knowledge_base_id)
+    if kb is None or kb.team_id != context.team.id:
+        raise HTTPException(404, "知识库不存在")
+    kb.name = payload.name
+    _commit_kb(session)
+    return KnowledgeBaseOut(id=kb.id, name=kb.name)
+
+
+@router.delete("/{team_id}/knowledge-bases/{knowledge_base_id}", status_code=204)
+def delete_knowledge_base(
+    knowledge_base_id: uuid.UUID,
+    context: TeamContext = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> None:
+    kb = session.get(KnowledgeBase, knowledge_base_id)
+    if kb is None or kb.team_id != context.team.id:
+        raise HTTPException(404, "知识库不存在")
+    documents = list(
+        session.scalars(
+            select(Document).where(Document.knowledge_base_id == kb.id).with_for_update()
+        )
+    )
+    storage_keys = [document.storage_key for document in documents]
+    for document in documents:
+        release_quota_once(session, context.team.id, document)
+    session.delete(kb)
+    session.commit()
+    store = get_object_store()
+    for storage_key in storage_keys:
+        with contextlib.suppress(OSError):
+            store.delete(storage_key)
 
 
 def _member_rows(session: Session, team_id: uuid.UUID) -> list[MemberOut]:

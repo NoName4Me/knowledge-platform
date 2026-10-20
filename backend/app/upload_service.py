@@ -48,8 +48,11 @@ def fingerprint(
     content_type: str,
     size_bytes: int,
     digest: str,
+    folder_id: uuid.UUID | None = None,
 ) -> str:
     encoded = f"{knowledge_base_id}\0{filename}\0{content_type}\0{size_bytes}\0{digest}".encode()
+    if folder_id is not None:
+        encoded += f"\0{folder_id}".encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -64,9 +67,12 @@ def reserve_upload(
     filename: str,
     content_type: str,
     data: bytes,
+    folder_id: uuid.UUID | None = None,
 ) -> Reservation:
     digest = hashlib.sha256(data).hexdigest()
-    request_fingerprint = fingerprint(knowledge_base_id, filename, content_type, len(data), digest)
+    request_fingerprint = fingerprint(
+        knowledge_base_id, filename, content_type, len(data), digest, folder_id
+    )
     # 先取团队额度行锁。所有团队内新的上传都串行到这里，避免读取同一份剩余额度。
     quota = session.scalars(
         select(TeamQuota).where(TeamQuota.team_id == team_id).with_for_update()
@@ -103,6 +109,7 @@ def reserve_upload(
         team_id=team_id,
         knowledge_base_id=knowledge_base_id,
         uploaded_by_id=user_id,
+        folder_id=folder_id,
         title=filename.rsplit(".", 1)[0],
         filename=filename,
         content_type=content_type,

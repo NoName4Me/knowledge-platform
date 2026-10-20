@@ -92,6 +92,7 @@ class DocumentOut(BaseModel):
     knowledge_base_id: uuid.UUID
     title: str
     filename: str
+    folder_id: uuid.UUID | None = None
     size_bytes: int
     status: str
     failure_reason: str | None
@@ -99,6 +100,7 @@ class DocumentOut(BaseModel):
 
 
 class Citation(BaseModel):
+    number: int | None = None
     document_id: uuid.UUID
     document_title: str
     locator_label: str

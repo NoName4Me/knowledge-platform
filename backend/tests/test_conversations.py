@@ -16,9 +16,7 @@ def _setup(client, session):
     team = make_team(session, "问答团队")
     add_member(session, team, user, role="admin")
     client.post("/api/auth/login", json={"email": user.email, "password": "password123"})
-    kb = client.post(
-        f"/api/teams/{team.id}/knowledge-bases", json={"name": "资料库"}
-    ).json()
+    kb = client.post(f"/api/teams/{team.id}/knowledge-bases", json={"name": "资料库"}).json()
     client.post(
         f"/api/teams/{team.id}/documents?knowledge_base_id={kb['id']}",
         data={"knowledge_base_id": kb["id"]},
@@ -47,12 +45,7 @@ def test_conversation_is_private_to_creator(client, session):
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={"email": admin.email, "password": "password123"})
 
-    assert (
-        client.get(
-            f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations"
-        ).json()
-        == []
-    )
+    assert client.get(f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations").json() == []
     assert (
         client.get(
             f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
@@ -69,8 +62,7 @@ def test_turn_is_persisted_with_citations(client, session):
     conversation = _conversation(client, team.id, kb["id"])
     request_id = uuid.uuid4()
     response = client.post(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns",
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns",
         json={"client_request_id": str(request_id), "question": "年假有几天？"},
     )
     assert response.status_code == 200
@@ -82,8 +74,7 @@ def test_turn_is_persisted_with_citations(client, session):
     assert len(session.scalars(select(Turn)).all()) == 1
     assert len(session.scalars(select(CitationRecord)).all()) >= 1
     history = client.get(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns"
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns"
     ).json()
     assert history[0]["id"] == body["id"]
 
@@ -93,8 +84,7 @@ def test_duplicate_turn_request_is_idempotent(client, session):
     conversation = _conversation(client, team.id, kb["id"])
     request_id = str(uuid.uuid4())
     path = (
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns"
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns"
     )
     first = client.post(path, json={"client_request_id": request_id, "question": "年假？"})
     second = client.post(path, json={"client_request_id": request_id, "question": "年假？"})
@@ -102,9 +92,7 @@ def test_duplicate_turn_request_is_idempotent(client, session):
     assert second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
 
-    conflict = client.post(
-        path, json={"client_request_id": request_id, "question": "另一个问题"}
-    )
+    conflict = client.post(path, json={"client_request_id": request_id, "question": "另一个问题"})
     assert conflict.status_code == 409
 
 
@@ -192,16 +180,13 @@ def test_stream_draft_is_visible_after_interrupted_connection(client, session):
     session.commit()
 
     history = client.get(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns"
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns"
     ).json()
     current = next(item for item in history if item["id"] == str(turn_id))
     assert current["answer_draft"] == "年假规定：入职满一年可享"
 
 
-def test_stream_model_failure_emits_error_and_persists_failed_status(
-    client, session, monkeypatch
-):
+def test_stream_model_failure_emits_error_and_persists_failed_status(client, session, monkeypatch):
     from app import conversations
 
     class FailingProvider:
@@ -222,17 +207,14 @@ def test_stream_model_failure_emits_error_and_persists_failed_status(
     assert events[-1]["error_code"] == "MODEL_UNAVAILABLE"
 
     history = client.get(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns"
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns"
     ).json()
     assert history[0]["status"] == "failed"
     assert history[0]["error_code"] == "MODEL_UNAVAILABLE"
     assert history[0]["answer_draft"] is None
 
 
-def test_stream_revoked_membership_prevents_answer_publication(
-    client, session, monkeypatch
-):
+def test_stream_revoked_membership_prevents_answer_publication(client, session, monkeypatch):
     from app import conversations
     from app.models import TeamMembership
 
@@ -261,8 +243,7 @@ def test_stream_revoked_membership_prevents_answer_publication(
     assert events[-1]["type"] == "error"
     assert events[-1]["error_code"] == "ACCESS_REVOKED"
     assert not any(
-        event["type"] == "turn" and event["turn"]["status"] == "completed"
-        for event in events
+        event["type"] == "turn" and event["turn"]["status"] == "completed" for event in events
     )
 
     session.expire_all()
@@ -278,9 +259,7 @@ def test_stream_revoked_membership_prevents_answer_publication(
 def test_conversation_cannot_cross_knowledge_base(client, session):
     owner, team, kb = _setup(client, session)
     conversation = _conversation(client, team.id, kb["id"])
-    other_kb = client.post(
-        f"/api/teams/{team.id}/knowledge-bases", json={"name": "其他库"}
-    ).json()
+    other_kb = client.post(f"/api/teams/{team.id}/knowledge-bases", json={"name": "其他库"}).json()
 
     path = (
         f"/api/teams/{team.id}/knowledge-bases/{other_kb['id']}/conversations/"
@@ -294,8 +273,7 @@ def test_deleted_source_hides_excerpt_but_keeps_citation(client, session):
     owner, team, kb = _setup(client, session)
     conversation = _conversation(client, team.id, kb["id"])
     response = client.post(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns",
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns",
         json={"client_request_id": str(uuid.uuid4()), "question": "年假有几天？"},
     )
     assert response.status_code == 200
@@ -303,14 +281,11 @@ def test_deleted_source_hides_excerpt_but_keeps_citation(client, session):
     assert citation["excerpt"]
 
     assert (
-        client.delete(
-            f"/api/teams/{team.id}/documents/{citation['document_id']}"
-        ).status_code
+        client.delete(f"/api/teams/{team.id}/documents/{citation['document_id']}").status_code
         == 204
     )
     history = client.get(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns"
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns"
     ).json()
     assert history[0]["citations"][0]["excerpt"] == ""
     assert history[0]["citations"][0]["document_title"] == citation["document_title"]
@@ -338,8 +313,7 @@ def test_busy_conversation_rejects_second_turn(client, session):
     session.commit()
 
     response = client.post(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns",
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns",
         json={"client_request_id": str(uuid.uuid4()), "question": "第二个问题"},
     )
     assert response.status_code == 409
@@ -367,15 +341,13 @@ def test_stale_answering_turn_is_interrupted_and_retryable(client, session):
     session.commit()
 
     history = client.get(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns"
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns"
     ).json()
     assert history[0]["status"] == "interrupted"
     assert history[0]["error_code"] == "TURN_TIMEOUT"
 
     response = client.post(
-        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
-        f"{conversation['id']}/turns",
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns",
         json={"client_request_id": str(uuid.uuid4()), "question": "重新提问"},
     )
     assert response.status_code == 200
@@ -520,3 +492,44 @@ def test_different_requests_concurrent_calls_publish_one_active_turn(client, ses
         select(Turn).where(Turn.conversation_id == uuid.UUID(conversation["id"]))
     ).all()
     assert len(turns) == 1
+
+
+def test_history_citations_preserve_sparse_answer_numbers(client, session):
+    """旧轮次 ordinal 为 1/2，但正文引用 2/5；展示必须恢复正文真实编号。"""
+    from app.models import CitationRecord, Turn
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    path = (
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/{conversation['id']}/turns"
+    )
+    created = client.post(
+        path, json={"client_request_id": str(uuid.uuid4()), "question": "年假几天？"}
+    )
+    assert created.status_code == 200
+    turn = session.get(Turn, uuid.UUID(created.json()["id"]))
+    turn.answer = "第一条结论。[2]第二条结论。[5]"
+    original = session.scalar(select(CitationRecord).where(CitationRecord.turn_id == turn.id))
+    session.add(
+        CitationRecord(
+            team_id=team.id,
+            knowledge_base_id=uuid.UUID(kb["id"]),
+            turn_id=turn.id,
+            owner_id=owner.id,
+            ordinal=2,
+            document_id=original.document_id,
+            chunk_id=original.chunk_id,
+            filename_snapshot=original.filename_snapshot,
+            locator_label_snapshot=original.locator_label_snapshot,
+        )
+    )
+    session.commit()
+    result = client.get(path).json()[0]
+    assert [citation["number"] for citation in result["citations"]] == [2, 5]
+    assert all(citation["excerpt"] for citation in result["citations"])
+    assert (
+        client.delete(f"/api/teams/{team.id}/documents/{original.document_id}").status_code == 204
+    )
+    deleted = client.get(path).json()[0]
+    assert [citation["number"] for citation in deleted["citations"]] == [2, 5]
+    assert all(citation["excerpt"] == "" for citation in deleted["citations"])
