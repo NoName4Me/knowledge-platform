@@ -116,8 +116,9 @@
 .upload__input { display: none; }
 .btn--upload { width: 100%; min-height: 42px; }
 .upload__hint { color: var(--muted); font-size: 12px; line-height: 1.9; text-align: center; margin-top: 12px; }
-.document-filter { padding: 0 16px 12px; }
-.document-filter input { width: 100%; min-width: 0; min-height: 36px; padding: 0 10px; border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface-subtle); font-size: 12px; }
+.document-filter { position: relative; display: flex; align-items: center; padding: 0 12px 12px; color: var(--muted); }
+.document-filter > svg { position: absolute; left: 24px; pointer-events: none; }
+.document-filter input { width: 100%; min-width: 0; min-height: 36px; padding: 0 14px 0 34px; border: 1px solid var(--control-line); border-radius: 999px; background: var(--surface-subtle); font-size: 12px; }
 .doc-list { list-style: none; margin: 0; padding: 0 12px; }
 .doc-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 16px 4px; border-bottom: 1px solid var(--line); }
 .doc-item__icon { color: var(--muted); background: var(--surface-subtle); width: 32px; height: 40px; display: grid; place-items: center; border-radius: 4px; }
@@ -145,6 +146,22 @@
 .conversation-bar .conversation-select .select-menu__panel { min-width: 220px; font-size: 12px; }
 .conversation-bar > .icon-button { width: 30px; min-width: 30px; height: 30px; margin-left: auto; }
 .conversation-bar__privacy { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11px; }
+.scope-bar { position: relative; display: flex; align-items: center; min-height: 42px; padding: 4px 20px 4px 24px; border-bottom: 1px solid var(--line); background: var(--surface); flex-shrink: 0; }
+.scope-bar__trigger { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 12px; }
+.scope-bar__trigger:hover:not(:disabled), .scope-bar__trigger[aria-expanded="true"] { border-color: var(--line); background: var(--surface-subtle); color: var(--ink); }
+.scope-bar__trigger > span { color: var(--ink); }
+.scope-bar__trigger > svg:last-child { margin-left: 2px; }
+.scope-panel { position: absolute; z-index: 35; top: calc(100% - 2px); left: 24px; width: min(360px, calc(100vw - 48px)); padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 14px 36px color-mix(in srgb, var(--ink) 14%, transparent); }
+.scope-option { display: flex; align-items: flex-start; gap: 9px; min-height: 36px; padding: 8px; border-radius: 5px; color: var(--ink); font-size: 12px; line-height: 1.5; cursor: pointer; }
+.scope-option:hover { background: var(--surface-strong); }
+.scope-option input { flex-shrink: 0; margin: 3px 0 0; accent-color: var(--accent); }
+.scope-option span { min-width: 0; overflow-wrap: anywhere; }
+.scope-documents { max-height: 240px; margin: 4px 0; padding: 4px 0; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.scope-documents { display: none; }
+.scope-documents.is-active { display: block; }
+.scope-hint { padding: 8px; color: var(--danger); font-size: 12px; }
+.scope-panel__actions { display: flex; justify-content: flex-end; padding: 4px 4px 0; }
+.scope-panel__actions .btn { min-height: 32px; padding: 0 12px; font-size: 12px; }
 .ask-empty { flex: 1; text-align: center; padding: 24px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
 .ask-history-state { flex: 1; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
 .evidence-mark { color: var(--accent); background: var(--accent-soft); width: 48px; height: 48px; border-radius: 18px 18px 18px 4px; display: grid; place-items: center; margin-bottom: 16px; }

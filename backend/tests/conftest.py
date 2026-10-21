@@ -71,6 +71,12 @@ def session() -> Iterator[Session]:
                 "analysis_documents, analysis_fields, analysis_tasks CASCADE"
             )
         )
+        conn.execute(
+            text(
+                "TRUNCATE knowledge_notes, reports, report_sources, report_sections, "
+                "report_citations, saved_requirements CASCADE"
+            )
+        )
 
 
 @pytest.fixture()

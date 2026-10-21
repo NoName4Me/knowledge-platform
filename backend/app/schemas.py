@@ -93,10 +93,13 @@ class DocumentOut(BaseModel):
     title: str
     filename: str
     folder_id: uuid.UUID | None = None
+    sort_order: int = 0
     size_bytes: int
     status: str
     failure_reason: str | None
     created_at: datetime
+    source_url: str | None = None
+    replaces_id: uuid.UUID | None = None
 
 
 class Citation(BaseModel):
@@ -135,6 +138,8 @@ class ConversationOut(BaseModel):
 class TurnAskRequest(BaseModel):
     client_request_id: uuid.UUID
     question: str = Field(min_length=1, max_length=4000)
+    # 空值表示当前知识库全部可用资料；显式清单由服务端复核团队、库和状态。
+    document_ids: list[uuid.UUID] | None = Field(default=None, min_length=1, max_length=100)
 
 
 class TurnOut(BaseModel):
@@ -142,6 +147,7 @@ class TurnOut(BaseModel):
     seq: int
     client_request_id: uuid.UUID
     question: str
+    scope_document_ids: list[uuid.UUID]
     status: str
     answer: str | None
     answer_draft: str | None
@@ -330,3 +336,251 @@ class AnalysisDetailOut(BaseModel):
     summary: AnalysisSummaryOut | None = None
     source_valid: bool
     invalid_reason: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# V3 笔记、报告与可复用要求合同
+# ---------------------------------------------------------------------------
+
+NoteSourceType = Literal["manual", "document", "conversation", "report"]
+ReportStatus = Literal["draft", "reviewed"]
+ReportSourceType = Literal["analysis", "document", "note"]
+SavedRequirementKind = Literal["analysis_fields", "report"]
+ReportLength = Literal["short", "medium", "long"]
+
+
+class MissingItemOut(BaseModel):
+    kind: Literal["missing", "review", "source"]
+    text: str
+
+
+class EvidenceSnapshotInput(BaseModel):
+    document_id: uuid.UUID | None = None
+    document_title: str = Field(min_length=1, max_length=300)
+    locator_label: str = Field(default="", max_length=200)
+    excerpt: str = Field(min_length=1, max_length=4000)
+
+
+class EvidenceSnapshotOut(EvidenceSnapshotInput):
+    pass
+
+
+class NoteCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=100_000)
+    source_type: NoteSourceType = "manual"
+    source_id: uuid.UUID | None = None
+    citations: list[EvidenceSnapshotInput] = Field(default_factory=list, max_length=50)
+
+
+class NoteUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=100_000)
+    citations: list[EvidenceSnapshotInput] = Field(default_factory=list, max_length=50)
+
+
+class NoteOut(BaseModel):
+    id: uuid.UUID
+    knowledge_base_id: uuid.UUID
+    title: str
+    content: str
+    source_type: NoteSourceType
+    source_id: uuid.UUID | None
+    citations: list[EvidenceSnapshotOut]
+    created_at: datetime
+    updated_at: datetime
+
+
+class NoteListOut(BaseModel):
+    items: list[NoteOut]
+
+
+class ReportCitationOut(EvidenceSnapshotOut):
+    id: uuid.UUID
+    ordinal: int
+
+
+class ReportSectionOut(BaseModel):
+    id: uuid.UUID
+    ordinal: int
+    heading: str
+    body: str
+    citations: list[ReportCitationOut]
+
+
+class ReportSectionUpdate(BaseModel):
+    id: uuid.UUID | None = None
+    heading: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=100_000)
+
+
+class ReportSourceOut(BaseModel):
+    id: uuid.UUID
+    source_type: ReportSourceType
+    source_id: uuid.UUID
+    title_snapshot: str
+    available: bool
+
+
+class ReportOut(BaseModel):
+    id: uuid.UUID
+    knowledge_base_id: uuid.UUID
+    source_analysis_id: uuid.UUID | None
+    title: str
+    purpose: str
+    focus: str
+    length: ReportLength
+    status: ReportStatus
+    needs_review: bool
+    review_note: str | None
+    source_review_required: bool
+    source_review_note: str | None
+    gaps: list[MissingItemOut]
+    sections: list[ReportSectionOut]
+    sources: list[ReportSourceOut]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportSummaryOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    status: ReportStatus
+    needs_review: bool
+    source_review_required: bool
+    source_analysis_id: uuid.UUID | None
+    section_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportListOut(BaseModel):
+    items: list[ReportSummaryOut]
+
+
+class ReportFromAnalysisRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    purpose: str = Field(default="", max_length=2000)
+    focus: str = Field(default="", max_length=2000)
+    length: ReportLength = "medium"
+
+
+class ReportFromSourcesRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    purpose: str = Field(default="", max_length=2000)
+    focus: str = Field(default="", max_length=2000)
+    length: ReportLength = "medium"
+    document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+    note_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+
+
+class ReportUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    purpose: str = Field(default="", max_length=2000)
+    focus: str = Field(default="", max_length=2000)
+    length: ReportLength
+    status: ReportStatus
+    source_review_acknowledged: bool = False
+    gaps: list[MissingItemOut] = Field(default_factory=list, max_length=50)
+    sections: list[ReportSectionUpdate] = Field(min_length=1, max_length=30)
+
+
+class RequirementPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class SavedRequirementCreate(BaseModel):
+    kind: SavedRequirementKind
+    name: str = Field(min_length=1, max_length=120)
+    payload: dict[str, object]
+
+
+class SavedRequirementOut(BaseModel):
+    id: uuid.UUID
+    kind: SavedRequirementKind
+    name: str
+    payload: dict[str, object]
+    updated_at: datetime
+
+
+class SavedRequirementListOut(BaseModel):
+    items: list[SavedRequirementOut]
+
+
+class AnalysisSuggestionRequest(BaseModel):
+    requirement: str = Field(min_length=2, max_length=2000)
+    document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10)
+
+
+class AnalysisSuggestionOut(BaseModel):
+    fields: list[AnalysisFieldInput]
+    rationale: str
+
+
+class DocumentGuideOut(BaseModel):
+    document_id: uuid.UUID
+    document_title: str
+    summary: str
+    section_labels: list[str]
+    key_concepts: list[str]
+    suggested_questions: list[str]
+    coverage_note: str
+
+
+class DocumentSearchHitOut(BaseModel):
+    document_id: uuid.UUID
+    document_title: str
+    locator_label: str
+    excerpt: str
+    before: str
+    after: str
+
+
+class DocumentSearchOut(BaseModel):
+    query: str
+    hits: list[DocumentSearchHitOut]
+
+
+class TextDocumentCreate(BaseModel):
+    knowledge_base_id: uuid.UUID
+    title: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=2_000_000)
+    source_url: str | None = Field(default=None, max_length=2000)
+    folder_id: uuid.UUID | None = None
+
+
+class WebDocumentCreate(BaseModel):
+    knowledge_base_id: uuid.UUID
+    url: str = Field(min_length=8, max_length=2000, pattern=r"^https?://")
+    title: str | None = Field(default=None, max_length=300)
+    folder_id: uuid.UUID | None = None
+
+
+class DocumentImpactOut(BaseModel):
+    document_id: uuid.UUID
+    document_title: str
+    note_count: int
+    analysis_count: int
+    report_count: int
+    stale_report_ids: list[uuid.UUID]
+
+
+class DocumentReplaceOut(BaseModel):
+    document: DocumentOut
+    affected: DocumentImpactOut
+
+
+class ReportGapOut(BaseModel):
+    items: list[MissingItemOut]
+    coverage_note: str
+
+
+class ReportSectionSuggestionRequest(BaseModel):
+    instruction: str = Field(min_length=2, max_length=2000)
+
+
+class ReportSectionSuggestionOut(BaseModel):
+    original: str
+    suggestion: str
+    rationale: str
+    provider: str

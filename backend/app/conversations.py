@@ -9,7 +9,11 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.answering import get_answer_provider, indicates_insufficient_grounding
+from app.answering import (
+    ConversationContext,
+    get_answer_provider,
+    indicates_insufficient_grounding,
+)
 from app.auth import TeamContext
 from app.db import apply_context
 from app.models import CitationRecord, Conversation, Document, KnowledgeBase, Turn
@@ -22,6 +26,10 @@ class ConversationNotFound(Exception):
 
 
 class ConversationBusy(Exception):
+    pass
+
+
+class InvalidDocumentScope(Exception):
     pass
 
 
@@ -148,6 +156,75 @@ def _answer_is_insufficient(answer: str) -> bool:
     return indicates_insufficient_grounding(answer) and len(answer.strip()) <= 100
 
 
+def _scope_key(document_ids: list[uuid.UUID] | None) -> list[str]:
+    return [str(document_id) for document_id in document_ids or []]
+
+
+def validate_document_scope(
+    session: Session,
+    team_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    document_ids: list[uuid.UUID] | None,
+) -> list[uuid.UUID] | None:
+    """显式资料范围只能包含当前团队、当前知识库内可用的文档。"""
+    if document_ids is None:
+        return None
+    unique_ids = list(dict.fromkeys(document_ids))
+    if len(unique_ids) != len(document_ids):
+        raise InvalidDocumentScope("资料范围中存在重复文档")
+    available = set(
+        session.scalars(
+            select(Document.id).where(
+                Document.id.in_(unique_ids),
+                Document.team_id == team_id,
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.status == "ready",
+                Document.deleted_at.is_(None),
+            )
+        ).all()
+    )
+    if available != set(unique_ids):
+        raise InvalidDocumentScope("所选资料不存在、尚未处理完成或不在当前知识库")
+    return unique_ids
+
+
+def _conversation_context(session: Session, turn: Turn) -> ConversationContext:
+    """只取当前用户最近几轮已完成内容，并限制注入模型的长度。"""
+    if turn.seq <= 1:
+        return ConversationContext()
+    rows = session.execute(
+        select(Turn.question, Turn.answer)
+        .where(
+            Turn.conversation_id == turn.conversation_id,
+            Turn.created_by_id == turn.created_by_id,
+            Turn.seq < turn.seq,
+            Turn.status == "completed",
+            Turn.answer.is_not(None),
+        )
+        .order_by(Turn.seq.desc())
+        .limit(4)
+    ).all()
+    history: list[tuple[str, str]] = []
+    remaining = 8000
+    for question, answer in reversed(rows):
+        answer = answer or ""
+        question = question.strip()[:1000]
+        answer = answer.strip()[:2500]
+        if remaining < len(question) + len(answer):
+            break
+        history.append((question, answer))
+        remaining -= len(question) + len(answer)
+    return ConversationContext(history=tuple(history))
+
+
+def _retrieval_question(question: str, context: ConversationContext) -> str:
+    """将最近问题附在检索文本后，帮助代词和省略主题获得上下文。"""
+    if not context.history:
+        return question
+    previous_question = context.history[-1][0]
+    return f"{question}\n此前问题：{previous_question}"[:5000]
+
+
 def begin_turn(
     session: Session,
     context: TeamContext,
@@ -155,6 +232,7 @@ def begin_turn(
     conversation_id: uuid.UUID,
     client_request_id: uuid.UUID,
     question: str,
+    document_ids: list[uuid.UUID] | None = None,
 ) -> tuple[Turn, bool]:
     """占位并返回 (轮次, 是否为已存在的重复请求)。
 
@@ -175,9 +253,12 @@ def begin_turn(
         )
     ).one_or_none()
     if existing is not None:
-        if existing.question != question:
+        if (
+            existing.question != question
+            or existing.scope_document_ids != _scope_key(document_ids)
+        ):
             session.rollback()
-            raise ValueError("同一请求标识对应不同问题")
+            raise ValueError("同一请求标识对应不同问题或资料范围")
         session.commit()
         _restore_rls_context(session, context)
         refreshed = session.get(Turn, existing.id)
@@ -204,6 +285,7 @@ def begin_turn(
         client_request_id=client_request_id,
         seq=seq,
         question=question,
+        scope_document_ids=_scope_key(document_ids),
         status="answering",
     )
     session.add(new_turn)
@@ -339,23 +421,35 @@ def answer_turn(
     conversation_id: uuid.UUID,
     client_request_id: uuid.UUID,
     question: str,
+    document_ids: list[uuid.UUID] | None = None,
 ) -> TurnOutData:
+    document_ids = validate_document_scope(
+        session, context.team.id, knowledge_base_id, document_ids
+    )
     turn, reused = begin_turn(
-        session, context, knowledge_base_id, conversation_id, client_request_id, question
+        session,
+        context,
+        knowledge_base_id,
+        conversation_id,
+        client_request_id,
+        question,
+        document_ids,
     )
     if reused:
         return turn_data(session, turn)
 
     try:
+        conversation_context = _conversation_context(session, turn)
         chunks = retrieve(
             session,
             team_id=context.team.id,
             knowledge_base_id=knowledge_base_id,
-            question=question,
+            question=_retrieval_question(question, conversation_context),
+            document_ids=document_ids,
         )
         if not chunks:
             return _finish_insufficient(session, context, turn)
-        result = get_answer_provider().answer(question, chunks)
+        result = get_answer_provider().answer(question, chunks, conversation_context)
     except Exception as exc:  # noqa: BLE001
         _mark_failed(session, context, turn.id, "MODEL_UNAVAILABLE")
         raise RuntimeError("回答生成失败") from exc
@@ -395,11 +489,18 @@ def stream_answer(
         return
 
     try:
+        scoped_document_ids = (
+            [uuid.UUID(value) for value in turn.scope_document_ids]
+            if turn.scope_document_ids
+            else None
+        )
+        conversation_context = _conversation_context(session, turn)
         chunks = retrieve(
             session,
             team_id=context.team.id,
             knowledge_base_id=knowledge_base_id,
-            question=question,
+            question=_retrieval_question(question, conversation_context),
+            document_ids=scoped_document_ids,
         )
     except Exception:  # noqa: BLE001
         _mark_failed(session, context, turn.id, "MODEL_UNAVAILABLE")
@@ -414,7 +515,7 @@ def stream_answer(
     provider = get_answer_provider()
     buffer: list[str] = []
     try:
-        for piece in provider.stream(question, chunks):
+        for piece in provider.stream(question, chunks, conversation_context):
             buffer.append(piece)
             # 草稿按块落库：断流后重新读取可看到已生成内容。
             turn.answer_draft = "".join(buffer)
@@ -458,6 +559,7 @@ def turn_data(session: Session, turn: Turn) -> TurnOutData:
         seq=turn.seq,
         client_request_id=turn.client_request_id,
         question=turn.question,
+        scope_document_ids=[uuid.UUID(value) for value in (turn.scope_document_ids or [])],
         status=turn.status,
         answer=turn.answer,
         answer_draft=turn.answer_draft,

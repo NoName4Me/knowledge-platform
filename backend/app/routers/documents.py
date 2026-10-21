@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from urllib.parse import quote
 
 from fastapi import (
@@ -21,11 +22,26 @@ from sqlalchemy.orm import Session
 from app.auth import TeamContext, get_team_context, require_admin
 from app.config import get_settings
 from app.db import apply_context, get_session
+from app.ingestion import (
+    IngestionError,
+    fetch_web_page,
+    impact_summary,
+    mark_source_reviews,
+    safe_filename,
+    web_title,
+)
 from app.models import Document, DocumentFolder, KnowledgeBase
 from app.reconciliation import retry_failed_upload
-from app.schemas import DocumentOut
+from app.schemas import (
+    DocumentImpactOut,
+    DocumentOut,
+    DocumentReplaceOut,
+    TextDocumentCreate,
+    WebDocumentCreate,
+)
 from app.storage import delete_objects_best_effort, get_object_store
 from app.upload_service import (
+    SUPPORTED_FORMAT_LABEL,
     SUPPORTED_TYPES,
     IdempotencyConflict,
     QuotaExceeded,
@@ -62,7 +78,12 @@ def list_documents(
     )
     if knowledge_base_id is not None:
         stmt = stmt.where(Document.knowledge_base_id == knowledge_base_id)
-    stmt = stmt.order_by(Document.created_at.desc())
+    stmt = stmt.order_by(
+        Document.folder_id.asc().nullsfirst(),
+        Document.sort_order,
+        Document.created_at,
+        Document.id,
+    )
     return [DocumentOut.model_validate(doc) for doc in session.scalars(stmt)]
 
 
@@ -102,7 +123,7 @@ async def upload_document(
     if extension not in SUPPORTED_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="暂不支持该格式，当前支持 PDF、DOCX、TXT、Markdown",
+            detail=f"暂不支持该格式，当前支持 {SUPPORTED_FORMAT_LABEL}",
         )
 
     data = await file.read()
@@ -192,6 +213,150 @@ def download_document(
             "Content-Disposition": f"inline; filename*=UTF-8''{quote(document.filename, safe='')}"
         },
     )
+
+def _folder(
+    session: Session,
+    team_id: uuid.UUID,
+    kb_id: uuid.UUID,
+    folder_id: uuid.UUID | None,
+) -> None:
+    if folder_id is None:
+        return
+    folder = session.scalar(
+        select(DocumentFolder).where(
+            DocumentFolder.id == folder_id,
+            DocumentFolder.team_id == team_id,
+            DocumentFolder.knowledge_base_id == kb_id,
+        )
+    )
+    if folder is None:
+        raise HTTPException(404, "目标文件夹不存在或不属于当前知识库")
+
+
+def _store_document(
+    *,
+    session: Session,
+    team_id: uuid.UUID,
+    team_name: str,
+    user_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    filename: str,
+    content_type: str,
+    data: bytes,
+    folder_id: uuid.UUID | None,
+    title: str,
+    source_url: str | None,
+    replaces_id: uuid.UUID | None = None,
+    after_reservation: Callable[[Document], object] | None = None,
+) -> Document:
+    try:
+        reservation = reserve_upload(
+            session,
+            team_id=team_id,
+            team_name=team_name,
+            knowledge_base_id=knowledge_base_id,
+            user_id=user_id,
+            idempotency_key=uuid.uuid4(),
+            filename=filename,
+            content_type=content_type,
+            data=data,
+            folder_id=folder_id,
+            source_url=source_url,
+            replaces_id=replaces_id,
+        )
+    except QuotaExceeded as exc:
+        session.rollback()
+        raise HTTPException(409, "团队存储额度不足") from exc
+    document = reservation.document
+    document.title = title[:300]
+    if after_reservation is not None:
+        try:
+            after_reservation(document)
+        except Exception:
+            session.rollback()
+            raise
+    session.commit()
+    apply_context(session, user_id=user_id, team_id=team_id)
+    try:
+        get_object_store().put(document.storage_key, data)
+    except Exception as exc:  # noqa: BLE001
+        mark_upload_failed(session, document, "文件写入存储失败")
+        session.commit()
+        raise HTTPException(502, "文件写入存储失败") from exc
+    mark_uploaded(session, document)
+    session.commit()
+    return document
+
+
+@router.get("/{document_id}/impact", response_model=DocumentImpactOut)
+def get_document_impact(
+    document_id: uuid.UUID,
+    context: TeamContext = Depends(get_team_context),
+    session: Session = Depends(get_session),
+) -> DocumentImpactOut:
+    document = session.get(Document, document_id)
+    if document is None or document.team_id != context.team.id or document.deleted_at is not None:
+        raise HTTPException(404, "资料不存在")
+    return DocumentImpactOut.model_validate(
+        impact_summary(session, document, context.team.id, context.user.id)
+    )
+
+
+@router.post("/text", response_model=DocumentOut, status_code=201)
+def create_text_document(
+    payload: TextDocumentCreate,
+    context: TeamContext = Depends(get_team_context),
+    session: Session = Depends(get_session),
+) -> DocumentOut:
+    _get_knowledge_base(session, context.team.id, payload.knowledge_base_id)
+    _folder(session, context.team.id, payload.knowledge_base_id, payload.folder_id)
+    data = payload.content.encode("utf-8")
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(413, "粘贴内容超过单份资料大小限制")
+    document = _store_document(
+        session=session,
+        team_id=context.team.id,
+        team_name=context.team.name,
+        user_id=context.user.id,
+        knowledge_base_id=payload.knowledge_base_id,
+        filename=safe_filename(payload.title, ".txt"),
+        content_type="text/plain",
+        data=data,
+        folder_id=payload.folder_id,
+        title=payload.title,
+        source_url=payload.source_url,
+    )
+    return DocumentOut.model_validate(document)
+
+
+@router.post("/web", response_model=DocumentOut, status_code=201)
+def create_web_document(
+    payload: WebDocumentCreate,
+    context: TeamContext = Depends(get_team_context),
+    session: Session = Depends(get_session),
+) -> DocumentOut:
+    _get_knowledge_base(session, context.team.id, payload.knowledge_base_id)
+    _folder(session, context.team.id, payload.knowledge_base_id, payload.folder_id)
+    try:
+        final_url, data, content_type = fetch_web_page(payload.url, settings.max_upload_bytes)
+    except IngestionError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    title = (payload.title or web_title(data, "网页资料")).strip() or "网页资料"
+    extension = ".html" if "html" in content_type else ".txt"
+    document = _store_document(
+        session=session,
+        team_id=context.team.id,
+        team_name=context.team.name,
+        user_id=context.user.id,
+        knowledge_base_id=payload.knowledge_base_id,
+        filename=safe_filename(title, extension),
+        content_type="text/html" if extension == ".html" else "text/plain",
+        data=data,
+        folder_id=payload.folder_id,
+        title=title,
+        source_url=final_url,
+    )
+    return DocumentOut.model_validate(document)
 
 
 @router.post("/{document_id}/retry", response_model=DocumentOut, status_code=202)
@@ -286,5 +451,80 @@ def update_document(
             if folder is None:
                 raise HTTPException(404, "目标文件夹不存在或不属于当前知识库")
         document.folder_id = payload.folder_id
+        if document.folder_id is not None:
+            maximum = session.scalar(
+                select(Document.sort_order)
+                .where(
+                    Document.knowledge_base_id == document.knowledge_base_id,
+                    Document.folder_id == document.folder_id,
+                    Document.id != document.id,
+                    Document.deleted_at.is_(None),
+                )
+                .order_by(Document.sort_order.desc())
+                .limit(1)
+            )
+        else:
+            maximum = session.scalar(
+                select(Document.sort_order)
+                .where(
+                    Document.knowledge_base_id == document.knowledge_base_id,
+                    Document.folder_id.is_(None),
+                    Document.id != document.id,
+                    Document.deleted_at.is_(None),
+                )
+                .order_by(Document.sort_order.desc())
+                .limit(1)
+            )
+        document.sort_order = (maximum or -1) + 1
     session.commit()
     return DocumentOut.model_validate(document)
+
+
+@router.post("/{document_id}/replace", response_model=DocumentReplaceOut, status_code=201)
+async def replace_document(
+    document_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID = Form(...),
+    file: UploadFile = File(...),
+    context: TeamContext = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> DocumentReplaceOut:
+    old = session.scalar(
+        select(Document)
+        .where(
+            Document.id == document_id,
+            Document.team_id == context.team.id,
+            Document.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if old is None:
+        raise HTTPException(404, "资料不存在")
+    if old.knowledge_base_id != knowledge_base_id:
+        raise HTTPException(422, "目标资料不属于当前知识库")
+    filename = file.filename or "未命名"
+    extension = extension_lower(filename)
+    if extension not in SUPPORTED_TYPES:
+        raise HTTPException(415, f"暂不支持该格式，当前支持 {SUPPORTED_FORMAT_LABEL}")
+    data = await file.read()
+    if not data or len(data) > settings.max_upload_bytes:
+        raise HTTPException(422, "文件为空或超过大小限制")
+    affected = impact_summary(session, old, context.team.id, context.user.id)
+    document = _store_document(
+        session=session,
+        team_id=context.team.id,
+        team_name=context.team.name,
+        user_id=context.user.id,
+        knowledge_base_id=old.knowledge_base_id,
+        filename=filename,
+        content_type=SUPPORTED_TYPES[extension],
+        data=data,
+        folder_id=old.folder_id,
+        title=old.title,
+        source_url=None,
+        replaces_id=old.id,
+        after_reservation=lambda replacement: mark_source_reviews(session, old, replacement),
+    )
+    return DocumentReplaceOut(
+        document=DocumentOut.model_validate(document),
+        affected=DocumentImpactOut.model_validate(affected),
+    )

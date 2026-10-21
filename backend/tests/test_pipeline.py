@@ -143,6 +143,77 @@ def test_retrieval_matches_keyword_even_when_vector_distance_is_large(client, se
     assert "交通发票" in results[0].content
 
 
+def test_retrieval_keyword_recall_finds_identifier_outside_vector_candidates(client, session):
+    from app.retrieval import retrieve
+
+    team, kb_id = _prepare(client, session)
+    for index in range(5):
+        _upload(
+            client,
+            team.id,
+            kb_id,
+            filename=f"general-{index}.txt",
+            content=f"普通说明第 {index + 1} 份，内容与本问题无关。",
+        )
+    target = _upload(
+        client,
+        team.id,
+        kb_id,
+        filename="numbered.txt",
+        content="编号 FAQ-1042 对应备份保留周期为三十天。",
+    )
+    for _ in range(6):
+        _run_worker_once()
+
+    results = retrieve(
+        session,
+        team.id,
+        kb_id,
+        "FAQ-1042 的保留周期是多少？",
+        top_k=1,
+        candidate_k=1,
+        distance_limit=0.0,
+        min_lexical_score=0.1,
+    )
+
+    assert results
+    assert str(results[0].document_id) == target["id"]
+    assert "三十天" in results[0].content
+
+
+def test_retrieval_respects_explicit_document_scope(client, session):
+    from app.retrieval import retrieve
+
+    team, kb_id = _prepare(client, session)
+    selected = _upload(
+        client,
+        team.id,
+        kb_id,
+        filename="selected.txt",
+        content="年假规定：五天。",
+    )
+    _upload(
+        client,
+        team.id,
+        kb_id,
+        filename="outside.txt",
+        content="年假规定：十五天。",
+    )
+    _run_worker_once()
+    _run_worker_once()
+
+    results = retrieve(
+        session,
+        team.id,
+        kb_id,
+        "年假规定",
+        document_ids=[selected["id"]],
+    )
+
+    assert results
+    assert {str(result.document_id) for result in results} == {selected["id"]}
+
+
 def test_ask_returns_citations(client, session):
     team, kb_id = _prepare(client, session)
     _upload(client, team.id, kb_id, content="年假规定：入职满一年可享五天年假。")

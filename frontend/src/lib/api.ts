@@ -1,8 +1,29 @@
 import type {
   AnalysisCreateRequest,
   AnalysisDetailOut,
+  AnalysisSuggestionOut,
   AnalysisTaskListOut,
   AnalysisTaskOut,
+  DocumentGuideOut,
+  DocumentImpactOut,
+  DocumentReplaceOut,
+  DocumentSearchOut,
+  NoteCreateRequest,
+  NoteListOut,
+  NoteOut,
+  NoteUpdateRequest,
+  ReportFromAnalysisRequest,
+  ReportFromSourcesRequest,
+  ReportGapOut,
+  ReportListOut,
+  ReportOut,
+  ReportSectionSuggestionOut,
+  ReportUpdateRequest,
+  SavedRequirementCreate,
+  SavedRequirementOut,
+  SavedRequirementListOut,
+  TextDocumentCreate,
+  WebDocumentCreate,
 } from "./analysis-types";
 
 export type {
@@ -18,6 +39,30 @@ export type {
   AnalysisSummaryOut,
   AnalysisTaskListOut,
   AnalysisTaskOut,
+  AnalysisSuggestionOut,
+  DocumentOut,
+  DocumentGuideOut,
+  DocumentImpactOut,
+  DocumentReplaceOut,
+  DocumentSearchOut,
+  NoteCreateRequest,
+  NoteListOut,
+  NoteOut,
+  NoteUpdateRequest,
+  ReportFromAnalysisRequest,
+  ReportFromSourcesRequest,
+  ReportGapOut,
+  ReportListOut,
+  ReportOut,
+  ReportSectionOut,
+  ReportSectionSuggestionOut,
+  ReportSummaryOut,
+  ReportUpdateRequest,
+  SavedRequirementCreate,
+  SavedRequirementOut,
+  SavedRequirementListOut,
+  TextDocumentCreate,
+  WebDocumentCreate,
 } from "./analysis-types";
 
 export type TeamSummary = {
@@ -47,6 +92,7 @@ export type DocumentFolder = {
   knowledge_base_id: string;
   parent_id: string | null;
   name: string;
+  sort_order?: number;
 };
 
 export type TeamMember = {
@@ -79,10 +125,13 @@ export type DocumentItem = {
   knowledge_base_id: string;
   title: string;
   filename: string;
+  sort_order?: number;
   size_bytes: number;
   status: DocumentStatus;
   failure_reason: string | null;
   created_at: string;
+  source_url?: string | null;
+  replaces_id?: string | null;
 };
 
 export type Citation = {
@@ -114,6 +163,7 @@ export type Turn = {
   seq: number;
   client_request_id: string;
   question: string;
+  scope_document_ids: string[];
   status: TurnStatus;
   answer: string | null;
   answer_draft: string | null;
@@ -154,6 +204,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const detail = body?.detail;
+    const envelope = body?.error;
+    if (
+      envelope &&
+      typeof envelope === "object" &&
+      typeof envelope.message === "string"
+    ) {
+      throw new ApiError(
+        response.status,
+        envelope.message,
+        typeof envelope.code === "string" ? envelope.code : null,
+      );
+    }
     if (typeof detail === "string") {
       throw new ApiError(response.status, detail);
     }
@@ -258,6 +320,8 @@ export const api = {
     writeRequest<DocumentFolder>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders`, jsonInit("POST", { name, parent_id: parentId })),
   renameFolder: (teamId: string, kbId: string, folderId: string, name: string) =>
     writeRequest<DocumentFolder>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders/${folderId}`, jsonInit("PATCH", { name })),
+  reorderTree: (teamId: string, kbId: string, parentId: string | null, items: Array<{ kind: "folder" | "document"; id: string }>, moving?: { kind: "folder" | "document"; id: string }) =>
+    writeRequest<DocumentFolder[]>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders/reorder`, jsonInit("POST", { parent_id: parentId, items, moving: moving ?? null })),
   moveFolder: (teamId: string, kbId: string, folderId: string, parentId: string | null) =>
     writeRequest<DocumentFolder>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders/${folderId}/parent`, jsonInit("PATCH", { parent_id: parentId })),
   deleteFolder: (teamId: string, kbId: string, folderId: string) =>
@@ -317,6 +381,138 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: "{}",
     }),
+  createTextDocument: (teamId: string, payload: TextDocumentCreate) =>
+    writeRequest<DocumentItem>(
+      `/api/teams/${teamId}/documents/text`,
+      jsonInit(FORM_METHOD, payload),
+    ),
+  createWebDocument: (teamId: string, payload: WebDocumentCreate) =>
+    writeRequest<DocumentItem>(
+      `/api/teams/${teamId}/documents/web`,
+      jsonInit(FORM_METHOD, payload),
+    ),
+  getDocumentImpact: (teamId: string, documentId: string) =>
+    request<DocumentImpactOut>(`/api/teams/${teamId}/documents/${documentId}/impact`),
+  replaceDocument: (teamId: string, documentId: string, knowledgeBaseId: string, file: File) => {
+    const form = new FormData();
+    form.append("knowledge_base_id", knowledgeBaseId);
+    form.append("file", file);
+    return writeRequest<DocumentReplaceOut>(
+      `/api/teams/${teamId}/documents/${documentId}/replace`,
+      {
+        method: FORM_METHOD,
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: form,
+      },
+    );
+  },
+  getDocumentGuide: (teamId: string, kbId: string, documentId: string) =>
+    request<DocumentGuideOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/documents/${documentId}/guide`,
+    ),
+  searchDocuments: (teamId: string, kbId: string, query: string, documentId?: string) => {
+    const params = new URLSearchParams({ q: query });
+    if (documentId) params.set("document_id", documentId);
+    return request<DocumentSearchOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/document-search?${params}`,
+    );
+  },
+
+  listNotes: (teamId: string, kbId: string) =>
+    request<NoteListOut>(`/api/teams/${teamId}/knowledge-bases/${kbId}/notes`),
+  createNote: (teamId: string, kbId: string, payload: NoteCreateRequest) =>
+    writeRequest<NoteOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/notes`,
+      jsonInit(FORM_METHOD, payload),
+    ),
+  updateNote: (teamId: string, kbId: string, noteId: string, payload: NoteUpdateRequest) =>
+    writeRequest<NoteOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/notes/${noteId}`,
+      jsonInit("PUT", payload),
+    ),
+  deleteNote: (teamId: string, kbId: string, noteId: string) =>
+    writeRequest<void>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/notes/${noteId}`,
+      { method: "DELETE" },
+    ),
+
+  listReports: (teamId: string, kbId: string) =>
+    request<ReportListOut>(`/api/teams/${teamId}/knowledge-bases/${kbId}/reports`),
+  getReport: (teamId: string, kbId: string, reportId: string) =>
+    request<ReportOut>(`/api/teams/${teamId}/knowledge-bases/${kbId}/reports/${reportId}`),
+  createReportFromAnalysis: (
+    teamId: string,
+    kbId: string,
+    analysisId: string,
+    payload: ReportFromAnalysisRequest,
+  ) =>
+    writeRequest<ReportOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/reports/from-analysis/${analysisId}`,
+      jsonInit(FORM_METHOD, payload),
+    ),
+  createReportFromSources: (
+    teamId: string,
+    kbId: string,
+    payload: ReportFromSourcesRequest,
+  ) =>
+    writeRequest<ReportOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/reports/from-sources`,
+      jsonInit(FORM_METHOD, payload),
+    ),
+  updateReport: (teamId: string, kbId: string, reportId: string, payload: ReportUpdateRequest) =>
+    writeRequest<ReportOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/reports/${reportId}`,
+      jsonInit("PUT", payload),
+    ),
+  deleteReport: (teamId: string, kbId: string, reportId: string) =>
+    writeRequest<void>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/reports/${reportId}`,
+      { method: "DELETE" },
+    ),
+  getReportGaps: (teamId: string, kbId: string, reportId: string) =>
+    request<ReportGapOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/reports/${reportId}/gaps`,
+    ),
+  suggestReportSection: (
+    teamId: string,
+    kbId: string,
+    reportId: string,
+    sectionId: string,
+    instruction: string,
+  ) =>
+    writeRequest<ReportSectionSuggestionOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/reports/${reportId}/sections/${sectionId}/suggest`,
+      jsonInit(FORM_METHOD, { instruction }),
+    ),
+
+  suggestAnalysisFields: (
+    teamId: string,
+    kbId: string,
+    requirement: string,
+    documentIds: string[],
+  ) =>
+    writeRequest<AnalysisSuggestionOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/analysis-suggestions`,
+      jsonInit(FORM_METHOD, { requirement, document_ids: documentIds }),
+    ),
+  listRequirements: (teamId: string, kbId: string, kind?: "analysis_fields" | "report") => {
+    const query = kind ? `?kind=${kind}` : "";
+    return request<SavedRequirementListOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/requirements${query}`,
+    );
+  },
+  createRequirement: (teamId: string, kbId: string, payload: SavedRequirementCreate) =>
+    writeRequest<SavedRequirementOut>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/requirements`,
+      jsonInit(FORM_METHOD, payload),
+    ),
+  deleteRequirement: (teamId: string, kbId: string, requirementId: string) =>
+    writeRequest<void>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/requirements/${requirementId}`,
+      { method: "DELETE" },
+    ),
+  reportExportUrl: (teamId: string, kbId: string, reportId: string, format: "docx" | "csv" | "xlsx" | "pdf") =>
+    `/api/teams/${teamId}/knowledge-bases/${kbId}/reports/${reportId}/export.${format}`,
 
   listAnalyses: (teamId: string, knowledgeBaseId: string, cursor?: string) => {
     const query = new URLSearchParams();
@@ -375,6 +571,7 @@ export const api = {
     conversationId: string,
     clientRequestId: string,
     question: string,
+    documentIds?: string[],
   ) =>
     writeRequest<Turn>(
       `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/conversations/` +
@@ -382,6 +579,7 @@ export const api = {
       jsonInit(FORM_METHOD, {
         client_request_id: clientRequestId,
         question,
+        ...(documentIds ? { document_ids: documentIds } : {}),
       }),
     ),
   streamConversationTurn: async (
@@ -390,6 +588,7 @@ export const api = {
     conversationId: string,
     clientRequestId: string,
     question: string,
+    documentIds: string[] | undefined,
     onEvent: (event: TurnStreamEvent) => void,
     signal?: AbortSignal,
   ) => {
@@ -407,6 +606,7 @@ export const api = {
         body: JSON.stringify({
           client_request_id: clientRequestId,
           question,
+          ...(documentIds ? { document_ids: documentIds } : {}),
         }),
         signal,
       },

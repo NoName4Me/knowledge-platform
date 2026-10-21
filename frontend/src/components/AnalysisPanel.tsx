@@ -13,12 +13,15 @@ import {
   type AnalysisDetailOut,
   type AnalysisFieldInput,
   type AnalysisFieldResultOut,
+  type AnalysisSuggestionOut,
   type AnalysisSummaryOut,
   type AnalysisTaskOut,
   type DocumentItem,
+  type SavedRequirementOut,
 } from "../lib/api";
 import { useEvidence, type EvidenceSource } from "../lib/evidence-context";
 import { Icon } from "./Icon";
+import { Modal } from "./Modal";
 import { SelectMenu } from "./Popover";
 
 type Props = {
@@ -28,6 +31,7 @@ type Props = {
   knowledgeBaseName: string;
   documents: DocumentItem[];
   onError: (message: string) => void;
+  onReportCreated: (reportId: string) => void;
 };
 
 type DraftField = AnalysisFieldInput & { key: string };
@@ -401,11 +405,13 @@ function AnalysisDetailView({
   detail,
   canRerun,
   onRerun,
+  onCreateReport,
   loadDetail,
 }: {
   detail: AnalysisDetailOut;
   canRerun: boolean;
   onRerun: () => void;
+  onCreateReport: () => Promise<void>;
   loadDetail: () => Promise<AnalysisDetailOut>;
 }) {
   const evidence = useEvidence();
@@ -434,6 +440,11 @@ function AnalysisDetailView({
           <span className={`analysis-status analysis-status--${detail.task.status}`}>
             {TASK_STATUS[detail.task.status]}
           </span>
+          {!sourceInvalid && completed && (
+            <button className="btn analysis-rerun" type="button" onClick={() => void onCreateReport()}>
+              生成报告
+            </button>
+          )}
           {canRerun && !sourceInvalid && (
             <button
               className="btn btn--ghost analysis-rerun"
@@ -503,6 +514,7 @@ export function AnalysisPanel({
   knowledgeBaseName,
   documents,
   onError,
+  onReportCreated,
 }: Props) {
   const evidence = useEvidence();
   const [tasks, setTasks] = useState<AnalysisTaskOut[]>([]);
@@ -519,6 +531,13 @@ export function AnalysisPanel({
   const [fields, setFields] = useState<DraftField[]>([newDraftField()]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [reporting, setReporting] = useState(false);
+  const [requirementText, setRequirementText] = useState("");
+  const [fieldSuggestion, setFieldSuggestion] = useState<AnalysisSuggestionOut | null>(null);
+  const [suggestingFields, setSuggestingFields] = useState(false);
+  const [savedFields, setSavedFields] = useState<SavedRequirementOut[]>([]);
+  const [savePresetOpen, setSavePresetOpen] = useState(false);
+  const [presetName, setPresetName] = useState("");
   // 重新运行会预填旧配置并记录来源任务；用户改动表单后视为新分析，不再挂来源。
   const [sourceTask, setSourceTask] = useState<{
     id: string;
@@ -582,6 +601,20 @@ export function AnalysisPanel({
       detailRequest.current += 1;
     };
   }, [knowledgeBaseId, loadHistory, teamId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listRequirements(teamId, knowledgeBaseId, "analysis_fields")
+      .then((response) => {
+        if (!cancelled) setSavedFields(response.items);
+      })
+      .catch((err) => {
+        if (!cancelled) onError(errorMessage(err, "加载常用分析字段失败"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [knowledgeBaseId, onError, teamId]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -658,6 +691,105 @@ export function AnalysisPanel({
     });
   }
 
+  async function suggestFields() {
+    if (!requirementText.trim() || suggestingFields) return;
+    setSuggestingFields(true);
+    try {
+      setFieldSuggestion(
+        await api.suggestAnalysisFields(
+          teamId,
+          knowledgeBaseId,
+          requirementText.trim(),
+          effectiveSelectedIds,
+        ),
+      );
+    } catch (err) {
+      onError(errorMessage(err, "生成字段建议失败"));
+    } finally {
+      setSuggestingFields(false);
+    }
+  }
+
+  function applyFieldSuggestion() {
+    if (!fieldSuggestion) return;
+    setSourceTask(null);
+    setFields(
+      fieldSuggestion.fields.map((field) => ({
+        ...field,
+        key: crypto.randomUUID(),
+      })),
+    );
+    setFieldSuggestion(null);
+  }
+
+  function applySavedFields(preset: SavedRequirementOut) {
+    const rawFields = preset.payload.fields;
+    if (!Array.isArray(rawFields)) {
+      onError("这项常用字段的数据格式无效");
+      return;
+    }
+    const next = rawFields.flatMap((item): DraftField[] => {
+      if (!item || typeof item !== "object") return [];
+      const record = item as Record<string, unknown>;
+      const valueType = record.value_type;
+      if (
+        typeof record.name !== "string" ||
+        typeof record.description !== "string" ||
+        !VALUE_TYPES.some((type) => type.value === valueType)
+      ) return [];
+      return [{
+        key: crypto.randomUUID(),
+        name: record.name,
+        description: record.description,
+        value_type: valueType as AnalysisFieldInput["value_type"],
+      }];
+    });
+    if (!next.length) {
+      onError("这项常用字段没有可用内容");
+      return;
+    }
+    setSourceTask(null);
+    setFields(next);
+  }
+
+  async function saveCurrentFields() {
+    const cleaned = fields.map(({ key: _key, ...field }) => field);
+    if (
+      !presetName.trim() ||
+      cleaned.some((field) => !field.name.trim() || !field.description.trim())
+    ) return;
+    try {
+      const saved = await api.createRequirement(teamId, knowledgeBaseId, {
+        kind: "analysis_fields",
+        name: presetName.trim(),
+        payload: {
+          fields: cleaned.map((field) => ({
+            ...field,
+            name: field.name.trim(),
+            description: field.description.trim(),
+          })),
+        },
+      });
+      setSavedFields((items) => [
+        saved,
+        ...items.filter((item) => item.id !== saved.id),
+      ]);
+      setSavePresetOpen(false);
+      setPresetName("");
+    } catch (err) {
+      onError(errorMessage(err, "保存常用字段失败"));
+    }
+  }
+
+  async function removeSavedFields(preset: SavedRequirementOut) {
+    try {
+      await api.deleteRequirement(teamId, knowledgeBaseId, preset.id);
+      setSavedFields((items) => items.filter((item) => item.id !== preset.id));
+    } catch (err) {
+      onError(errorMessage(err, "删除常用字段失败"));
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (submitting) return;
@@ -723,6 +855,23 @@ export function AnalysisPanel({
       setSubmitError(errorMessage(err, "提交分析失败，请检查资料和字段后重试。"));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function createReport() {
+    if (!detail || reporting) return;
+    setReporting(true);
+    try {
+      const created = await api.createReportFromAnalysis(teamId, knowledgeBaseId, detail.task.id, {
+        purpose: "",
+        focus: detail.fields.map((field) => field.name).join("、"),
+        length: "medium",
+      });
+      onReportCreated(created.id);
+    } catch (err) {
+      onError(errorMessage(err, "生成报告失败，请确认来源已完成且仍然有效。"));
+    } finally {
+      setReporting(false);
     }
   }
 
@@ -841,6 +990,72 @@ export function AnalysisPanel({
                     <small>留空时自动生成</small>
                   </label>
                 </div>
+                <section className="analysis-field-assistant" aria-labelledby="analysis-field-assistant-heading">
+                  <div>
+                    <h4 id="analysis-field-assistant-heading">按目的建议字段</h4>
+                    <p>先描述要完成的分析，系统给出可调整字段；确认后才会替换下方字段定义。</p>
+                  </div>
+                  <div className="analysis-field-assistant__input">
+                    <textarea
+                      value={requirementText}
+                      onChange={(event) => setRequirementText(event.target.value)}
+                      rows={3}
+                      maxLength={2000}
+                      placeholder="例如：比较三份合同的有效期、付款条件和违约限制"
+                      disabled={submitting || suggestingFields}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      disabled={submitting || suggestingFields || requirementText.trim().length < 2}
+                      onClick={() => void suggestFields()}
+                    >
+                      {suggestingFields ? "生成中…" : "生成字段建议"}
+                    </button>
+                  </div>
+                  {fieldSuggestion && (
+                    <div className="analysis-field-suggestion" role="status">
+                      <strong>建议字段</strong>
+                      <ul>
+                        {fieldSuggestion.fields.map((field) => (
+                          <li key={field.name}>
+                            <span>{field.name}</span>
+                            <small>{field.description}</small>
+                          </li>
+                        ))}
+                      </ul>
+                      <p>{fieldSuggestion.rationale}</p>
+                      <div>
+                        <button type="button" className="btn btn--ghost" onClick={() => setFieldSuggestion(null)}>不采用</button>
+                        <button type="button" className="btn" onClick={applyFieldSuggestion}>填入并继续调整</button>
+                      </div>
+                    </div>
+                  )}
+                </section>
+                <section className="analysis-presets" aria-labelledby="analysis-presets-heading">
+                  <div className="analysis-section-heading">
+                    <div>
+                      <h4 id="analysis-presets-heading">常用字段</h4>
+                      <p>保存本人常用的字段组合，下次直接套用后继续调整。</p>
+                    </div>
+                    <button type="button" className="btn btn--ghost" onClick={() => setSavePresetOpen(true)} disabled={submitting}>保存当前字段</button>
+                  </div>
+                  {savedFields.length === 0 ? (
+                    <p className="analysis-presets__empty">还没有保存的字段组合。</p>
+                  ) : (
+                    <ul>
+                      {savedFields.map((preset) => (
+                        <li key={preset.id}>
+                          <span>{preset.name}</span>
+                          <div>
+                            <button type="button" className="btn btn--ghost" onClick={() => applySavedFields(preset)} disabled={submitting}>套用</button>
+                            <button type="button" className="icon-button" aria-label={`删除常用字段 ${preset.name}`} onClick={() => void removeSavedFields(preset)} disabled={submitting}><Icon name="trash" size={15} /></button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
                 <fieldset className="analysis-fields">
                   <legend>字段定义</legend>
                   {fields.map((field, index) => (
@@ -956,6 +1171,7 @@ export function AnalysisPanel({
             <AnalysisDetailView
               detail={detail}
               loadDetail={() => api.getAnalysis(teamId, knowledgeBaseId, detail.task.id)}
+              onCreateReport={createReport}
               canRerun={
                 detail.task.status !== "queued" &&
                 detail.task.status !== "running" &&
@@ -971,6 +1187,18 @@ export function AnalysisPanel({
           )}
         </div>
       </div>
+      {savePresetOpen && (
+        <Modal title="保存常用字段" onClose={() => setSavePresetOpen(false)}>
+          <form className="knowledge-form" onSubmit={(event) => { event.preventDefault(); void saveCurrentFields(); }}>
+            <p className="maintenance-hint">保存当前 {fields.length} 个字段的名称、说明和类型。同名要求会更新原记录。</p>
+            <label><span>名称</span><input autoFocus value={presetName} onChange={(event) => setPresetName(event.target.value)} maxLength={120} required /></label>
+            <div className="maintenance-actions">
+              <button type="button" className="btn btn--ghost" onClick={() => setSavePresetOpen(false)}>取消</button>
+              <button className="btn" disabled={!presetName.trim() || fields.some((field) => !field.name.trim() || !field.description.trim())}>保存</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </section>
   );
 }

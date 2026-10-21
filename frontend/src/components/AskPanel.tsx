@@ -1,19 +1,30 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  startTransition,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   api,
   ApiError,
   type Conversation,
+  type DocumentItem,
   type Turn,
 } from "../lib/api";
 import { AnswerWithEvidence, StreamingAnswer } from "./AnswerWithEvidence";
 import { turnEvidence } from "../lib/citation-text";
+import { documentLabel } from "../lib/document-label";
 import { useEvidence } from "../lib/evidence-context";
 import { Icon } from "./Icon";
+import { Modal } from "./Modal";
 import { SelectMenu } from "./Popover";
 
 type Props = {
   teamId: string;
   knowledgeBaseId: string;
+  documents: DocumentItem[];
   canAsk: boolean;
   processing: boolean;
   onError: (message: string) => void;
@@ -31,6 +42,7 @@ const turnError = (turn: Turn): string => {
 export function AskPanel({
   teamId,
   knowledgeBaseId,
+  documents,
   canAsk,
   processing,
   onError,
@@ -44,9 +56,44 @@ export function AskPanel({
   const [loadingTurns, setLoadingTurns] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reloadTurns, setReloadTurns] = useState(0);
+  const [scopeMode, setScopeMode] = useState<"all" | "selected">("all");
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [noteTurn, setNoteTurn] = useState<Turn | null>(null);
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteBody, setNoteBody] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
   const listRef = useRef<HTMLOListElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const scopeTriggerRef = useRef<HTMLButtonElement>(null);
   const sendingRef = useRef(false);
+  const readyDocuments = useMemo(
+    () => documents.filter((document) => document.status === "ready"),
+    [documents],
+  );
+  const readyDocumentIds = new Set(readyDocuments.map((document) => document.id));
+  const validSelectedDocumentIds = selectedDocumentIds.filter((id) =>
+    readyDocumentIds.has(id),
+  );
+  const selectedDocuments = readyDocuments.filter((document) =>
+    validSelectedDocumentIds.includes(document.id),
+  );
+  const effectiveScopeMode =
+    scopeMode === "selected" && selectedDocuments.length > 0 ? "selected" : "all";
+  const documentIds =
+    effectiveScopeMode === "selected" ? validSelectedDocumentIds : undefined;
+
+  useEffect(() => {
+    if (!scopeOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setScopeOpen(false);
+      scopeTriggerRef.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [scopeOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,7 +150,12 @@ export function AskPanel({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const text = question.trim();
-    if (!text || sendingRef.current || !canAsk) return;
+    if (
+      !text ||
+      sendingRef.current ||
+      !canAsk ||
+      (scopeMode === "selected" && selectedDocuments.length === 0)
+    ) return;
 
     sendingRef.current = true;
     setQuestion("");
@@ -123,21 +175,27 @@ export function AskPanel({
       }
 
       requestId = crypto.randomUUID();
-      const existingTurnCount = activeId === conversationId ? turns.length : 0;
-      const pending: Turn = {
-        id: requestId,
-        seq: existingTurnCount + 1,
-        client_request_id: requestId,
-        question: text,
-        status: "answering",
-        answer: null,
-        answer_draft: null,
-        error_code: null,
-        started_at: new Date().toISOString(),
-        finished_at: null,
-        citations: [],
-      };
-      setTurns((items) => [...items, pending]);
+      const currentRequestId = requestId;
+      startTransition(() => {
+        setTurns((items) => {
+          const existingTurnCount = activeId === conversationId ? items.length : 0;
+          const pending: Turn = {
+            id: currentRequestId,
+            seq: existingTurnCount + 1,
+            client_request_id: currentRequestId,
+            question: text,
+            scope_document_ids: documentIds ?? [],
+            status: "answering",
+            answer: null,
+            answer_draft: null,
+            error_code: null,
+            started_at: new Date().toISOString(),
+            finished_at: null,
+            citations: [],
+          };
+          return [...items, pending];
+        });
+      });
       let streamedText = "";
       let completed: Turn | null = null;
       let streamError: ApiError | null = null;
@@ -145,14 +203,15 @@ export function AskPanel({
         teamId,
         knowledgeBaseId,
         conversationId,
-        requestId,
+        currentRequestId,
         text,
+        documentIds,
         (event) => {
           if (event.type === "delta" && event.text) {
             streamedText += event.text;
             setTurns((items) =>
               items.map((item) =>
-                item.client_request_id === requestId
+                item.client_request_id === currentRequestId
                   ? { ...item, answer_draft: streamedText }
                   : item,
               ),
@@ -162,8 +221,8 @@ export function AskPanel({
             setTurns((items) => [
               ...items.filter(
                 (item) =>
-                  item.id !== requestId &&
-                  item.client_request_id !== requestId &&
+                  item.id !== currentRequestId &&
+                  item.client_request_id !== currentRequestId &&
                   item.id !== event.turn?.id,
               ),
               event.turn as Turn,
@@ -198,6 +257,36 @@ export function AskPanel({
       sendingRef.current = false;
       setBusy(false);
       inputRef.current?.focus();
+    }
+  }
+
+  function openNoteEditor(turn: Turn) {
+    setNoteTurn(turn);
+    setNoteTitle(turn.question.slice(0, 200));
+    setNoteBody(turn.answer ?? "");
+  }
+
+  async function saveNote() {
+    if (!noteTurn || !noteTitle.trim() || !noteBody.trim() || savingNote) return;
+    setSavingNote(true);
+    try {
+      await api.createNote(teamId, knowledgeBaseId, {
+        title: noteTitle.trim(),
+        content: noteBody.trim(),
+        source_type: "conversation",
+        source_id: activeId,
+        citations: noteTurn.citations.map((citation) => ({
+          document_id: citation.document_id,
+          document_title: citation.document_title,
+          locator_label: citation.locator_label,
+          excerpt: citation.excerpt,
+        })),
+      });
+      setNoteTurn(null);
+    } catch (error) {
+      onError(error instanceof ApiError ? error.message : "保存问答笔记失败，请重试");
+    } finally {
+      setSavingNote(false);
     }
   }
 
@@ -248,6 +337,91 @@ export function AskPanel({
         >
           <Icon name="plus" size={16} />
         </button>
+      </div>
+      <div className="scope-bar">
+        <button
+          ref={scopeTriggerRef}
+          type="button"
+          className="scope-bar__trigger"
+          aria-expanded={scopeOpen}
+          aria-controls="ask-scope-panel"
+          disabled={busy || readyDocuments.length === 0}
+          onClick={() => setScopeOpen((value) => !value)}
+        >
+          <Icon name="file" size={15} />
+          <span>
+            {effectiveScopeMode === "all"
+              ? `全部资料 · ${readyDocuments.length} 份`
+              : `已选 ${selectedDocuments.length} 份资料`}
+          </span>
+          <Icon name="chevron" size={14} />
+        </button>
+        {scopeOpen ? (
+          <div className="scope-panel" id="ask-scope-panel">
+            <label className="scope-option">
+              <input
+                type="radio"
+                name="ask-scope"
+                checked={effectiveScopeMode === "all"}
+                onChange={() => setScopeMode("all")}
+              />
+              <span>当前知识库全部资料</span>
+            </label>
+            <label className="scope-option">
+              <input
+                type="radio"
+                name="ask-scope"
+                checked={effectiveScopeMode === "selected"}
+                onChange={() => {
+                  setScopeMode("selected");
+                  setSelectedDocumentIds((ids) =>
+                    ids.length
+                      ? ids
+                      : readyDocuments.map((document) => document.id),
+                  );
+                }}
+              />
+              <span>仅指定资料</span>
+            </label>
+            <div
+              className={`scope-documents${scopeMode === "selected" ? " is-active" : ""}`}
+            >
+              {readyDocuments.map((document) => (
+                <label className="scope-option" key={document.id}>
+                  <input
+                    type="checkbox"
+                    checked={validSelectedDocumentIds.includes(document.id)}
+                    onChange={(event) =>
+                      setSelectedDocumentIds((ids) =>
+                        event.target.checked
+                          ? [...ids, document.id]
+                          : ids.filter((id) => id !== document.id),
+                      )
+                    }
+                  />
+                  <span>{documentLabel(document)}</span>
+                </label>
+              ))}
+              {selectedDocuments.length === 0 ? (
+                <p className="scope-hint">
+                  取消全部选项后，本次提问会恢复为全部资料。
+                </p>
+              ) : null}
+            </div>
+            <div className="scope-panel__actions">
+              <button
+                className="btn btn--ghost"
+                type="button"
+                onClick={() => {
+                  setScopeOpen(false);
+                  scopeTriggerRef.current?.focus();
+                }}
+              >
+                完成
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {loadingConversations || (loadingTurns && turns.length === 0) ? (
@@ -325,6 +499,16 @@ export function AskPanel({
                         if (!current) throw new Error("这条回答已不可访问，请重新加载会话");
                         return turnEvidence(current);
                       }} />
+                      {turn.answer && (
+                        <button
+                          type="button"
+                          className="btn btn--ghost turn__save-note"
+                          onClick={() => openNoteEditor(turn)}
+                        >
+                          <Icon name="book" size={15} />
+                          保存为笔记
+                        </button>
+                      )}
                       {turn.citations.length === 0 && turn.status === "insufficient" ? (
                         <p className="turn__insufficient">
                           没有找到可引用的资料，请补充相关文档或调整问题。
@@ -382,6 +566,66 @@ export function AskPanel({
           </div>
         </div>
       </form>
+      {noteTurn && (
+        <Modal
+          title="保存为笔记"
+          onClose={() => !savingNote && setNoteTurn(null)}
+          busy={savingNote}
+        >
+          <form
+            className="knowledge-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveNote();
+            }}
+          >
+            <p className="maintenance-hint">
+              保存后可在笔记中继续编辑；回答内容与当时的引用快照会一起保存。
+            </p>
+            <label>
+              <span>笔记标题</span>
+              <input
+                autoFocus
+                value={noteTitle}
+                maxLength={200}
+                onChange={(event) => setNoteTitle(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              <span>笔记内容</span>
+              <textarea
+                value={noteBody}
+                rows={12}
+                maxLength={100000}
+                onChange={(event) => setNoteBody(event.target.value)}
+                required
+              />
+            </label>
+            <p className="maintenance-hint">
+              {noteTurn.citations.length
+                ? `将保存 ${noteTurn.citations.length} 条引用快照。`
+                : "这条回答没有可保存的原文引用。"}
+            </p>
+            <div className="maintenance-actions">
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={savingNote}
+                onClick={() => setNoteTurn(null)}
+              >
+                取消
+              </button>
+              <button
+                className="btn"
+                disabled={savingNote || !noteTitle.trim() || !noteBody.trim()}
+              >
+                {savingNote ? "保存中…" : "保存笔记"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </section>
   );
 }

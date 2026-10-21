@@ -62,7 +62,14 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         if session_cookie:
             expected = derive_csrf_token(session_cookie, settings.secret_key)
             if not token or not secrets.compare_digest(token, expected):
-                return _reject("请求令牌校验失败")
+                # 旧会话可能已过期或已轮换，而浏览器仍保留其 Cookie。登录
+                # 接口必须允许用当前预登录令牌建立新会话，否则用户会被
+                # 残留 Cookie 永久挡在登录页。
+                cookie_token = request.cookies.get(settings.csrf_cookie_name)
+                if request.url.path != "/api/auth/login" or not verify_prelogin_token(
+                    token, cookie_token
+                ):
+                    return _reject("请求令牌校验失败")
         else:
             cookie_token = request.cookies.get(settings.csrf_cookie_name)
             if not verify_prelogin_token(token, cookie_token):

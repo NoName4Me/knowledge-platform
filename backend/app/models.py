@@ -137,6 +137,7 @@ class DocumentFolder(Base):
     knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
     name: Mapped[str] = mapped_column(String(200))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Document(Base):
@@ -175,6 +176,7 @@ class Document(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
     folder_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     title: Mapped[str] = mapped_column(String(300))
     filename: Mapped[str] = mapped_column(String(300))
     content_type: Mapped[str] = mapped_column(String(120))
@@ -182,6 +184,8 @@ class Document(Base):
     storage_key: Mapped[str] = mapped_column(String(400), unique=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     failure_reason: Mapped[str | None] = mapped_column(String(500))
+    source_url: Mapped[str | None] = mapped_column(String(2000))
+    replaces_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     quota_released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -361,6 +365,10 @@ class Turn(Base):
     client_request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     seq: Mapped[int] = mapped_column(Integer)
     question: Mapped[str] = mapped_column(Text)
+    # 每轮固化的资料范围；空数组表示提问当时的整个知识库。
+    scope_document_ids: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
     status: Mapped[str] = mapped_column(String(20), default="answering", index=True)
     answer: Mapped[str | None] = mapped_column(Text)
     # 流式生成的中间文本；完成或失败后清空，避免与最终答案重复。
@@ -857,3 +865,243 @@ class AnalysisCitation(Base):
     excerpt: Mapped[str] = mapped_column(Text)
     source_fingerprint: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# V3 知识成果：笔记、报告与可复用要求
+# ---------------------------------------------------------------------------
+
+NOTE_SOURCE_TYPES = ("manual", "document", "conversation", "report")
+REPORT_STATUSES = ("draft", "reviewed")
+REPORT_SOURCE_TYPES = ("analysis", "document", "note")
+SAVED_REQUIREMENT_TYPES = ("analysis_fields", "report")
+
+
+class KnowledgeNote(Base):
+    """个人知识笔记；正文是理解或摘录，引用快照保留当时依据。"""
+
+    __tablename__ = "knowledge_notes"
+    __table_args__ = (
+        CheckConstraint(
+            "source_type in ('manual', 'document', 'conversation', 'report')",
+            name="ck_note_source_type",
+        ),
+        UniqueConstraint(
+            "team_id",
+            "knowledge_base_id",
+            "id",
+            "created_by_id",
+            name="uq_note_owner_scope",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "team_id"],
+            ["knowledge_bases.id", "knowledge_bases.team_id"],
+            name="fk_note_kb_team",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(String(20), default="manual")
+    source_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    citations: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Report(Base):
+    """本人报告；保存正文与来源关系，编辑不修改来源分析。"""
+
+    __tablename__ = "reports"
+    __table_args__ = (
+        CheckConstraint("status in ('draft', 'reviewed')", name="ck_report_status"),
+        UniqueConstraint(
+            "team_id",
+            "knowledge_base_id",
+            "id",
+            "created_by_id",
+            name="uq_report_owner_scope",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "team_id"],
+            ["knowledge_bases.id", "knowledge_bases.team_id"],
+            name="fk_report_kb_team",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    )
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    source_analysis_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    purpose: Mapped[str] = mapped_column(Text, default="")
+    focus: Mapped[str] = mapped_column(Text, default="")
+    length: Mapped[str] = mapped_column(String(20), default="medium")
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
+    needs_review: Mapped[bool] = mapped_column(default=False)
+    review_note: Mapped[str | None] = mapped_column(String(500))
+    source_review_required: Mapped[bool] = mapped_column(default=False)
+    source_review_note: Mapped[str | None] = mapped_column(String(500))
+    gaps: Mapped[list[dict[str, object]]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReportSource(Base):
+    """报告使用的来源与当时快照；来源删除后仍能解释报告出处。"""
+
+    __tablename__ = "report_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "source_type in ('analysis', 'document', 'note')", name="ck_report_source_type"
+        ),
+        UniqueConstraint("report_id", "source_type", "source_id", name="uq_report_source"),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "report_id", "owner_id"],
+            [
+                "reports.team_id",
+                "reports.knowledge_base_id",
+                "reports.id",
+                "reports.created_by_id",
+            ],
+            name="fk_report_source_report_owner",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    source_type: Mapped[str] = mapped_column(String(20))
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    title_snapshot: Mapped[str] = mapped_column(String(300))
+    fingerprint: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ReportSection(Base):
+    __tablename__ = "report_sections"
+    __table_args__ = (
+        UniqueConstraint("report_id", "ordinal", name="uq_report_section_ordinal"),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "report_id", "owner_id"],
+            [
+                "reports.team_id",
+                "reports.knowledge_base_id",
+                "reports.id",
+                "reports.created_by_id",
+            ],
+            name="fk_report_section_report_owner",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    ordinal: Mapped[int] = mapped_column(Integer)
+    heading: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReportCitation(Base):
+    __tablename__ = "report_citations"
+    __table_args__ = (
+        UniqueConstraint("section_id", "ordinal", name="uq_report_citation_ordinal"),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "report_id", "owner_id"],
+            [
+                "reports.team_id",
+                "reports.knowledge_base_id",
+                "reports.id",
+                "reports.created_by_id",
+            ],
+            name="fk_report_citation_report_owner",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["section_id", "report_id"],
+            ["report_sections.id", "report_sections.report_id"],
+            name="fk_report_citation_section",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    section_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    document_title: Mapped[str] = mapped_column(String(300))
+    locator_label: Mapped[str] = mapped_column(String(200))
+    excerpt: Mapped[str] = mapped_column(Text)
+
+
+class SavedRequirement(Base):
+    """用户确认后可再次套用的分析字段或报告要求。"""
+
+    __tablename__ = "saved_requirements"
+    __table_args__ = (
+        CheckConstraint(
+            "kind in ('analysis_fields', 'report')", name="ck_saved_requirement_kind"
+        ),
+        UniqueConstraint("team_id", "created_by_id", "kind", "name", name="uq_requirement_name"),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "team_id"],
+            ["knowledge_bases.id", "knowledge_bases.team_id"],
+            name="fk_requirement_kb_team",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(30))
+    name: Mapped[str] = mapped_column(String(120))
+    payload: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -17,10 +17,15 @@ settings = get_settings()
 
 SUPPORTED_TYPES = {
     ".pdf": "application/pdf",
+    ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".txt": "text/plain",
     ".md": "text/markdown",
+    ".html": "text/html",
+    ".htm": "text/html",
 }
+
+SUPPORTED_FORMAT_LABEL = "PDF、Word（DOC/DOCX）、TXT、Markdown 和 HTML"
 
 
 class QuotaExceeded(Exception):
@@ -68,6 +73,8 @@ def reserve_upload(
     content_type: str,
     data: bytes,
     folder_id: uuid.UUID | None = None,
+    source_url: str | None = None,
+    replaces_id: uuid.UUID | None = None,
 ) -> Reservation:
     digest = hashlib.sha256(data).hexdigest()
     request_fingerprint = fingerprint(
@@ -104,17 +111,29 @@ def reserve_upload(
         raise QuotaExceeded
 
     document_id = uuid.uuid4()
+    next_order = session.scalar(
+        select(func.coalesce(func.max(Document.sort_order), -1) + 1).where(
+            Document.knowledge_base_id == knowledge_base_id,
+            Document.deleted_at.is_(None),
+            Document.folder_id.is_(None)
+            if folder_id is None
+            else Document.folder_id == folder_id,
+        )
+    )
     document = Document(
         id=document_id,
         team_id=team_id,
         knowledge_base_id=knowledge_base_id,
         uploaded_by_id=user_id,
         folder_id=folder_id,
+        sort_order=next_order or 0,
         title=filename.rsplit(".", 1)[0],
         filename=filename,
         content_type=content_type,
         size_bytes=len(data),
         storage_key=build_storage_key(team_id, document_id, filename),
+        source_url=source_url,
+        replaces_id=replaces_id,
         status="uploading",
     )
     quota.reserved_documents += 1

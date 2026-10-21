@@ -71,6 +71,22 @@ def test_stale_session_token_is_rejected_after_login(client, session):
     assert response.status_code == 403
 
 
+def test_login_can_replace_stale_session_cookie(client, session):
+    make_user(session, "a@example.com")
+    client.cookies.set("kp_session", "expired-or-rotated-session")
+    prelogin = client.get("/api/auth/csrf").json()["csrf_token"]
+
+    response = client.request(
+        "POST",
+        "/api/auth/login",
+        json={"email": "a@example.com", "password": "password123"},
+        headers={"origin": ORIGIN, "x-csrf-token": prelogin},
+    )
+
+    assert response.status_code == 200
+    assert client.get("/api/auth/me").status_code == 200
+
+
 def test_member_cannot_list_members(client, session):
     _, team = _setup(client, session, role="member")
     assert client.get(f"/api/teams/{team.id}/members").status_code == 403

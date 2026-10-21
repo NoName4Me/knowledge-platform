@@ -120,3 +120,258 @@ export type AnalysisDetailOut = {
   source_valid: boolean;
   invalid_reason?: string | null;
 };
+
+export type EvidenceSnapshotInput = {
+  document_id?: string | null;
+  document_title: string;
+  locator_label?: string;
+  excerpt: string;
+};
+
+export type EvidenceSnapshotOut = {
+  document_id?: string | null;
+  document_title: string;
+  locator_label?: string;
+  excerpt: string;
+};
+
+export type NoteCreateRequest = {
+  title: string;
+  content: string;
+  source_type?: "manual" | "document" | "conversation" | "report";
+  source_id?: string | null;
+  citations?: EvidenceSnapshotInput[];
+};
+
+export type NoteUpdateRequest = {
+  title: string;
+  content: string;
+  citations?: EvidenceSnapshotInput[];
+};
+
+export type NoteOut = {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  content: string;
+  source_type: "manual" | "document" | "conversation" | "report";
+  source_id: string | null;
+  citations: EvidenceSnapshotOut[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type NoteListOut = {
+  items: NoteOut[];
+};
+
+export type MissingItemOut = {
+  kind: "missing" | "review" | "source";
+  text: string;
+};
+
+export type ReportGapOut = {
+  items: MissingItemOut[];
+  coverage_note: string;
+};
+
+export type ReportCitationOut = {
+  document_id?: string | null;
+  document_title: string;
+  locator_label?: string;
+  excerpt: string;
+  id: string;
+  ordinal: number;
+};
+
+export type ReportSectionOut = {
+  id: string;
+  ordinal: number;
+  heading: string;
+  body: string;
+  citations: ReportCitationOut[];
+};
+
+export type ReportSectionSuggestionRequest = {
+  instruction: string;
+};
+
+export type ReportSectionSuggestionOut = {
+  original: string;
+  suggestion: string;
+  rationale: string;
+  provider: string;
+};
+
+export type ReportSectionUpdate = {
+  id?: string | null;
+  heading: string;
+  body: string;
+};
+
+export type ReportSourceOut = {
+  id: string;
+  source_type: "analysis" | "document" | "note";
+  source_id: string;
+  title_snapshot: string;
+  available: boolean;
+};
+
+export type ReportOut = {
+  id: string;
+  knowledge_base_id: string;
+  source_analysis_id: string | null;
+  title: string;
+  purpose: string;
+  focus: string;
+  length: "short" | "medium" | "long";
+  status: "draft" | "reviewed";
+  needs_review: boolean;
+  review_note: string | null;
+  source_review_required: boolean;
+  source_review_note: string | null;
+  gaps: MissingItemOut[];
+  sections: ReportSectionOut[];
+  sources: ReportSourceOut[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ReportSummaryOut = {
+  id: string;
+  title: string;
+  status: "draft" | "reviewed";
+  needs_review: boolean;
+  source_review_required: boolean;
+  source_analysis_id: string | null;
+  section_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ReportListOut = {
+  items: ReportSummaryOut[];
+};
+
+export type ReportFromAnalysisRequest = {
+  title?: string | null;
+  purpose?: string;
+  focus?: string;
+  length?: "short" | "medium" | "long";
+};
+
+export type ReportFromSourcesRequest = {
+  title: string;
+  purpose?: string;
+  focus?: string;
+  length?: "short" | "medium" | "long";
+  document_ids?: string[];
+  note_ids?: string[];
+};
+
+export type ReportUpdateRequest = {
+  title: string;
+  purpose?: string;
+  focus?: string;
+  length: "short" | "medium" | "long";
+  status: "draft" | "reviewed";
+  source_review_acknowledged?: boolean;
+  gaps?: MissingItemOut[];
+  sections: ReportSectionUpdate[];
+};
+
+export type SavedRequirementCreate = {
+  kind: "analysis_fields" | "report";
+  name: string;
+  payload: Record<string, unknown>;
+};
+
+export type SavedRequirementOut = {
+  id: string;
+  kind: "analysis_fields" | "report";
+  name: string;
+  payload: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type SavedRequirementListOut = {
+  items: SavedRequirementOut[];
+};
+
+export type AnalysisSuggestionRequest = {
+  requirement: string;
+  document_ids?: string[];
+};
+
+export type AnalysisSuggestionOut = {
+  fields: AnalysisFieldInput[];
+  rationale: string;
+};
+
+export type DocumentGuideOut = {
+  document_id: string;
+  document_title: string;
+  summary: string;
+  section_labels: string[];
+  key_concepts: string[];
+  suggested_questions: string[];
+  coverage_note: string;
+};
+
+export type DocumentSearchHitOut = {
+  document_id: string;
+  document_title: string;
+  locator_label: string;
+  excerpt: string;
+  before: string;
+  after: string;
+};
+
+export type DocumentSearchOut = {
+  query: string;
+  hits: DocumentSearchHitOut[];
+};
+
+export type DocumentOut = {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  filename: string;
+  folder_id?: string | null;
+  sort_order?: number;
+  size_bytes: number;
+  status: string;
+  failure_reason: string | null;
+  created_at: string;
+  source_url?: string | null;
+  replaces_id?: string | null;
+};
+
+export type TextDocumentCreate = {
+  knowledge_base_id: string;
+  title: string;
+  content: string;
+  source_url?: string | null;
+  folder_id?: string | null;
+};
+
+export type WebDocumentCreate = {
+  knowledge_base_id: string;
+  url: string;
+  title?: string | null;
+  folder_id?: string | null;
+};
+
+export type DocumentImpactOut = {
+  document_id: string;
+  document_title: string;
+  note_count: number;
+  analysis_count: number;
+  report_count: number;
+  stale_report_ids: string[];
+};
+
+export type DocumentReplaceOut = {
+  document: DocumentOut;
+  affected: DocumentImpactOut;
+};

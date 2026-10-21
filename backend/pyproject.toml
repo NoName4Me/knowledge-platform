@@ -20,14 +20,16 @@ dependencies = [
     "pypdf>=5.1",
     "python-docx>=1.1",
     "boto3>=1.35",
+    "openpyxl>=3.1",
+    "reportlab>=4.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "boto3-stubs[s3]>=1.35",
     "pytest>=8.3",
-    # 仅用于生成 evaluation/v2 的样例 PDF，不进入运行时依赖。
-    "reportlab>=4.2",
+    "types-openpyxl>=3.1",
+    "types-reportlab>=4.2",
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
     "mypy>=1.13",

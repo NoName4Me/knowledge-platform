@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -26,11 +27,28 @@ class AnswerResult(BaseModel):
     used_chunk_ids: list[str]
 
 
+@dataclass(frozen=True)
+class ConversationContext:
+    """前文只帮助理解追问，不能作为本轮回答的事实依据。"""
+
+    history: tuple[tuple[str, str], ...] = ()
+
+
 class AnswerProvider:
-    def answer(self, question: str, chunks: list[RetrievedChunk]) -> AnswerResult:
+    def answer(
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        context: ConversationContext | None = None,
+    ) -> AnswerResult:
         raise NotImplementedError
 
-    def stream(self, question: str, chunks: list[RetrievedChunk]) -> Iterator[str]:
+    def stream(
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        context: ConversationContext | None = None,
+    ) -> Iterator[str]:
         """按增量产出文本；校验与持久化由调用方完成。"""
         raise NotImplementedError
 
@@ -43,7 +61,12 @@ class ExtractiveAnswerProvider(AnswerProvider):
             return "依据不足：没有检索到相关资料。"
         return f"{chunks[0].content}\n\n[1]"
 
-    def answer(self, question: str, chunks: list[RetrievedChunk]) -> AnswerResult:
+    def answer(
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        context: ConversationContext | None = None,
+    ) -> AnswerResult:
         if not chunks:
             return AnswerResult(answer="依据不足：没有检索到相关资料。", used_chunk_ids=[])
         return AnswerResult(
@@ -51,7 +74,12 @@ class ExtractiveAnswerProvider(AnswerProvider):
             used_chunk_ids=[str(chunks[0].chunk_id)],
         )
 
-    def stream(self, question: str, chunks: list[RetrievedChunk]) -> Iterator[str]:
+    def stream(
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        context: ConversationContext | None = None,
+    ) -> Iterator[str]:
         # 替身也走流式路径，保证协议与前端消费者用同一套代码验证。
         text = self._text(chunks)
         step = 12
@@ -65,7 +93,12 @@ class HttpAnswerProvider(AnswerProvider):
         self.model = model
         self.api_key = api_key
 
-    def answer(self, question: str, chunks: list[RetrievedChunk]) -> AnswerResult:
+    def answer(
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        context: ConversationContext | None = None,
+    ) -> AnswerResult:
         if not chunks:
             return AnswerResult(answer="依据不足：没有检索到相关资料。", used_chunk_ids=[])
 
@@ -73,7 +106,10 @@ class HttpAnswerProvider(AnswerProvider):
             f"[{index}] 来源：{chunk.document_title}（{chunk.locator_label}）\n{chunk.content}"
             for index, chunk in enumerate(chunks, start=1)
         )
-        user_prompt = f"资料片段：\n{numbered}\n\n问题：{question}"
+        user_prompt = (
+            f"{self._conversation_text(context)}"
+            f"资料片段：\n{numbered}\n\n问题：{question}"
+        )
 
         response = httpx.post(
             f"{self.base_url}/chat/completions",
@@ -103,7 +139,12 @@ class HttpAnswerProvider(AnswerProvider):
         return AnswerResult(answer=answer_text, used_chunk_ids=used)
 
     def _payload(
-        self, question: str, chunks: list[RetrievedChunk], *, stream: bool
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        context: ConversationContext | None,
+        *,
+        stream: bool,
     ) -> dict[str, Any]:
         numbered = "\n\n".join(
             f"[{index}] 来源：{chunk.document_title}（{chunk.locator_label}）\n{chunk.content}"
@@ -113,13 +154,24 @@ class HttpAnswerProvider(AnswerProvider):
             "model": self.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"资料片段：\n{numbered}\n\n问题：{question}"},
+                {
+                    "role": "user",
+                    "content": (
+                        f"{self._conversation_text(context)}"
+                        f"资料片段：\n{numbered}\n\n问题：{question}"
+                    ),
+                },
             ],
             "temperature": 0.2,
             "stream": stream,
         }
 
-    def stream(self, question: str, chunks: list[RetrievedChunk]) -> Iterator[str]:
+    def stream(
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        context: ConversationContext | None = None,
+    ) -> Iterator[str]:
         if not chunks:
             return
         with httpx.stream(
@@ -129,7 +181,7 @@ class HttpAnswerProvider(AnswerProvider):
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.api_key}",
             },
-            json=self._payload(question, chunks, stream=True),
+            json=self._payload(question, chunks, context, stream=True),
             timeout=60.0,
         ) as response:
             response.raise_for_status()
@@ -150,6 +202,19 @@ class HttpAnswerProvider(AnswerProvider):
                 text = delta.get("content")
                 if text:
                     yield text
+
+    @staticmethod
+    def _conversation_text(context: ConversationContext | None) -> str:
+        if context is None or not context.history:
+            return ""
+        turns = "\n".join(
+            f"用户：{question}\n助手：{answer}" for question, answer in context.history
+        )
+        return (
+            "以下是前文，只用于理解本轮追问中的指代和主题；"
+            "不得把前文回答当作事实依据，事实只能来自本轮资料片段：\n"
+            f"{turns}\n\n"
+        )
 
 
 def get_answer_provider() -> AnswerProvider:

@@ -14,12 +14,14 @@ from app.config import get_settings
 from app.conversations import (
     ConversationBusy,
     ConversationNotFound,
+    InvalidDocumentScope,
     answer_turn,
     begin_turn,
     create_conversation,
     get_owned_conversation,
     stream_answer,
     turn_data,
+    validate_document_scope,
 )
 from app.db import apply_context, get_session
 from app.models import Conversation, KnowledgeBase, Turn
@@ -142,6 +144,15 @@ def ask_in_conversation(
     session.commit()
     apply_context(session, user_id=context.user.id, team_id=context.team.id)
     try:
+        document_ids = validate_document_scope(
+            session,
+            context.team.id,
+            knowledge_base_id,
+            payload.document_ids,
+        )
+    except InvalidDocumentScope as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
         return answer_turn(
             session,
             context,
@@ -149,11 +160,14 @@ def ask_in_conversation(
             conversation_id,
             payload.client_request_id,
             payload.question.strip(),
+            document_ids,
         )
     except ConversationNotFound as exc:
         raise HTTPException(status_code=404, detail="会话不存在") from exc
     except ConversationBusy as exc:
         raise HTTPException(status_code=409, detail="当前会话已有进行中的提问") from exc
+    except InvalidDocumentScope as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -179,6 +193,15 @@ def ask_in_conversation_stream(
     session.commit()
     apply_context(session, user_id=context.user.id, team_id=context.team.id)
     try:
+        document_ids = validate_document_scope(
+            session,
+            context.team.id,
+            knowledge_base_id,
+            payload.document_ids,
+        )
+    except InvalidDocumentScope as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
         turn, reused = begin_turn(
             session,
             context,
@@ -186,6 +209,7 @@ def ask_in_conversation_stream(
             conversation_id,
             payload.client_request_id,
             payload.question.strip(),
+            document_ids,
         )
     except ConversationNotFound as exc:
         raise HTTPException(status_code=404, detail="会话不存在") from exc

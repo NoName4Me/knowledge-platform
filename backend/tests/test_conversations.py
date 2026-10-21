@@ -186,11 +186,148 @@ def test_stream_draft_is_visible_after_interrupted_connection(client, session):
     assert current["answer_draft"] == "年假规定：入职满一年可享"
 
 
+def test_follow_up_receives_recent_conversation_context(client, session, monkeypatch):
+    from app import conversations
+    from app.answering import ExtractiveAnswerProvider
+
+    captured: list[tuple[str, str]] = []
+
+    class CapturingProvider(ExtractiveAnswerProvider):
+        def answer(self, question, chunks, context=None):
+            captured.append(
+                (
+                    "answer",
+                    context.history[-1][0] if context is not None and context.history else "",
+                )
+            )
+            return super().answer(question, chunks, context)
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    monkeypatch.setattr(conversations, "get_answer_provider", lambda: CapturingProvider())
+    path = (
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns"
+    )
+    first = client.post(
+        path,
+        json={"client_request_id": str(uuid.uuid4()), "question": "年假有几天？"},
+    )
+    assert first.status_code == 200
+    second = client.post(
+        path,
+        json={"client_request_id": str(uuid.uuid4()), "question": "它适用于谁？"},
+    )
+    assert second.status_code == 200
+    assert captured[0][0] == "answer"
+    assert captured[1] == ("answer", "年假有几天？")
+
+
+def test_conversation_scope_is_validated_and_persisted(client, session):
+    from app.models import Document
+    from app.worker import run_once
+
+    owner, team, kb = _setup(client, session)
+    first_doc = session.scalars(select(Document)).one()
+    created = client.post(
+        f"/api/teams/{team.id}/documents?knowledge_base_id={kb['id']}",
+        data={"knowledge_base_id": kb["id"]},
+        files={"file": ("notice.txt", "请假需提前申请。", "text/plain")},
+    ).json()
+    run_once()
+    second_doc = session.get(Document, created["id"])
+    assert second_doc is not None
+    conversation = _conversation(client, team.id, kb["id"])
+    path = (
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns"
+    )
+    request_id = uuid.uuid4()
+    response = client.post(
+        path,
+        json={
+            "client_request_id": str(request_id),
+            "question": "年假有几天？",
+            "document_ids": [str(first_doc.id)],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["scope_document_ids"] == [str(first_doc.id)]
+
+    conflict = client.post(
+        path,
+        json={
+            "client_request_id": str(request_id),
+            "question": "年假有几天？",
+            "document_ids": [str(second_doc.id)],
+        },
+    )
+    assert conflict.status_code == 409
+
+
+def test_conversation_rejects_documents_from_another_knowledge_base(client, session):
+    from app.models import Document
+
+    owner, team, kb = _setup(client, session)
+    conversation = _conversation(client, team.id, kb["id"])
+    other_kb = client.post(
+        f"/api/teams/{team.id}/knowledge-bases",
+        json={"name": "其他库"},
+    ).json()
+    created = client.post(
+        f"/api/teams/{team.id}/documents?knowledge_base_id={other_kb['id']}",
+        data={"knowledge_base_id": other_kb["id"]},
+        files={"file": ("other.txt", "其他资料", "text/plain")},
+    ).json()
+    from app.worker import run_once
+
+    run_once()
+    other_doc = session.get(Document, created["id"])
+    assert other_doc is not None
+    assert other_doc.knowledge_base_id == uuid.UUID(other_kb["id"])
+
+    response = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns",
+        json={
+            "client_request_id": str(uuid.uuid4()),
+            "question": "其他资料说了什么？",
+            "document_ids": [str(other_doc.id)],
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_stream_rejects_unfinished_document_scope_before_creating_turn(client, session):
+    from app.models import Document, Turn
+
+    owner, team, kb = _setup(client, session)
+    pending = client.post(
+        f"/api/teams/{team.id}/documents?knowledge_base_id={kb['id']}",
+        data={"knowledge_base_id": kb["id"]},
+        files={"file": ("pending.txt", "尚未解析。", "text/plain")},
+    ).json()
+    conversation = _conversation(client, team.id, kb["id"])
+    response = client.post(
+        f"/api/teams/{team.id}/knowledge-bases/{kb['id']}/conversations/"
+        f"{conversation['id']}/turns/stream",
+        json={
+            "client_request_id": str(uuid.uuid4()),
+            "question": "这份资料说了什么？",
+            "document_ids": [pending["id"]],
+        },
+    )
+
+    assert response.status_code == 422
+    assert session.get(Document, pending["id"]).status == "pending"
+    assert session.scalars(select(Turn)).all() == []
+
+
 def test_stream_model_failure_emits_error_and_persists_failed_status(client, session, monkeypatch):
     from app import conversations
 
     class FailingProvider:
-        def stream(self, question, chunks):
+        def stream(self, question, chunks, context=None):
             yield "未完成的草稿"
             raise RuntimeError("model disconnected")
 
@@ -219,7 +356,7 @@ def test_stream_revoked_membership_prevents_answer_publication(client, session, 
     from app.models import TeamMembership
 
     class RevokingProvider:
-        def stream(self, question, chunks):
+        def stream(self, question, chunks, context=None):
             membership = session.scalars(
                 select(TeamMembership).where(
                     TeamMembership.user_id == owner.id,

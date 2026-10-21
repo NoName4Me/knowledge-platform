@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     s3_secret_key: str = ""
     s3_region: str = "garage"
     max_upload_bytes: int = 20 * 1024 * 1024
+    # 旧版 Word 先通过 LibreOffice headless 转成 DOCX；空值自动从 PATH 查找。
+    legacy_doc_converter: str = "soffice"
+    legacy_doc_timeout_seconds: int = 60
     # 每团队原始文件总容量与文档数量上限，和单文件限制分开。
     team_max_bytes: int = 5 * 1024 * 1024 * 1024
     team_max_documents: int = 500

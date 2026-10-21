@@ -110,7 +110,7 @@ export function WorkspacePage() {
   return <div className="workbench">
     <a className="skip-link" href="#workspace-main">跳到工作区</a>
     <header className="workbench-header">
-      {route.kind === "home" ? <a className="workbench-brand" href="/" aria-label="知识工作台首页"><Brand /></a> : <div className="library-heading"><a className="home-return" href="/" aria-label="返回首页" title="返回首页"><Icon name="back" size={19} /></a><span className="header-separator" />
+      {route.kind === "home" ? <a className="workbench-brand" href="/" aria-label="知识工作台首页"><Brand /></a> : <div className="library-heading"><a className="home-return" href="/" aria-label="返回首页" title="返回首页"><Icon name="back" size={15} /><span>首页</span></a>
         <div className="library-switch"><SelectMenu
           className="library-switch__control"
           label="切换知识库"

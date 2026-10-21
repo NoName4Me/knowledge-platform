@@ -124,6 +124,63 @@ def test_folder_tree_move_rejects_cycles_and_respects_scope(client, session):
     assert client.post(path, json={"name": "越界", "parent_id": alien}).status_code == 404
 
 
+
+def test_tree_reorder_keeps_mixed_siblings_and_moves_atomically(client, session):
+    _, _, base, kb = setup_workspace(client, session)
+    path = f"{base}/knowledge-bases/{kb}/folders"
+    folder_a = client.post(path, json={"name": "甲目录"}).json()
+    folder_b = client.post(path, json={"name": "乙目录"}).json()
+    doc_a = upload(client, base, kb).json()
+    doc_b = upload(client, base, kb, folder=folder_a["id"]).json()
+
+    response = client.post(
+        f"{path}/reorder",
+        json={
+            "parent_id": None,
+            "items": [
+                {"kind": "document", "id": doc_a["id"]},
+                {"kind": "folder", "id": folder_b["id"]},
+                {"kind": "folder", "id": folder_a["id"]},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    reordered_folders = response.json()
+    assert {item["id"] for item in reordered_folders} >= {folder_a["id"], folder_b["id"]}
+    listed = client.get(f"{base}/documents", params={"knowledge_base_id": kb}).json()
+    assert next(item for item in listed if item["id"] == doc_a["id"])["sort_order"] == 0
+    folders = client.get(path).json()
+    assert [item["id"] for item in folders if item["parent_id"] is None] == [
+        folder_b["id"],
+        folder_a["id"],
+    ]
+
+    # 移动和排序是一个原子操作：目标列表包含移动项本身。
+    moved = client.post(
+        f"{path}/reorder",
+        json={
+            "parent_id": None,
+            "items": [
+                {"kind": "document", "id": doc_a["id"]},
+                {"kind": "document", "id": doc_b["id"]},
+                {"kind": "folder", "id": folder_b["id"]},
+                {"kind": "folder", "id": folder_a["id"]},
+            ],
+            "moving": {"kind": "document", "id": doc_b["id"]},
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    assert {item["id"] for item in moved.json()} >= {
+        folder_a["id"],
+        folder_b["id"],
+    }
+    session.expire_all()
+    moved_doc = session.get(Document, uuid.UUID(doc_b["id"]))
+    assert moved_doc is not None
+    assert moved_doc.folder_id is None
+    assert moved_doc.sort_order == 1
+
+
 def test_move_and_upload_reject_other_library_and_team_folder(client, session):
     _, team, base, kb = setup_workspace(client, session)
     other_kb = client.post(f"{base}/knowledge-bases", json={"name": "另一库"}).json()["id"]

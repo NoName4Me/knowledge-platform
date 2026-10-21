@@ -74,7 +74,12 @@ def process_task(
         return
 
     try:
-        extracted = extract_document(document.filename, data)
+        extracted = extract_document(
+            document.filename,
+            data,
+            legacy_doc_converter=settings.legacy_doc_converter,
+            legacy_doc_timeout=settings.legacy_doc_timeout_seconds,
+        )
     except UnsupportedDocument as exc:
         mark_failed(session, task, document, str(exc), permanent=True)
         session.commit()

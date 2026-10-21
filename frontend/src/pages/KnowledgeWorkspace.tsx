@@ -6,6 +6,8 @@ import { readPreference, writePreference } from "../lib/workspace-preferences";
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { AskPanel } from "../components/AskPanel";
 import { DocumentPanel } from "../components/DocumentPanel";
+import { NotesPanel } from "../components/NotesPanel";
+import { ReportsPanel } from "../components/ReportsPanel";
 import { EvidenceDrawer } from "../components/EvidenceDrawer";
 import { EvidenceProvider } from "../components/EvidenceProvider";
 import { useEvidence } from "../lib/evidence-context";
@@ -26,7 +28,14 @@ function KnowledgeContents({ library }: { library: Library }) {
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const modeKey = `${session?.user.id}:${team.id}:${library.id}:mode`;
-  const [mode, setMode] = useState<"ask" | "analysis">(() => readPreference(modeKey) === "analysis" ? "analysis" : "ask");
+  const savedMode = readPreference(modeKey);
+  const [mode, setMode] = useState<"ask" | "analysis" | "notes" | "reports">(
+    savedMode === "analysis" || savedMode === "notes" || savedMode === "reports"
+      ? savedMode
+      : "ask",
+  );
+  const [activeReportId, setActiveReportId] = useState<string | null>(null);
+  const [reportsDirty, setReportsDirty] = useState(false);
   const [treeVisible, setTreeVisible] = useState(false);
   const processing = documents.some((doc) => ["uploading", "pending", "processing"].includes(doc.status));
   const closeEvidence = evidence.close;
@@ -56,13 +65,18 @@ function KnowledgeContents({ library }: { library: Library }) {
     void load();
     return () => { cancelled = true; clearTimeout(timer); };
   }, [team.id, library.id, processing, report, revision]);
-  function switchMode(value: "ask" | "analysis") { closeEvidence(); setMode(value); writePreference(modeKey, value); }
+  function switchMode(value: "ask" | "analysis" | "notes" | "reports") {
+    if (mode === "reports" && reportsDirty && value !== "reports" && !window.confirm("报告有未保存修改，离开将丢失。确定继续？")) return;
+    closeEvidence();
+    setMode(value);
+    writePreference(modeKey, value);
+  }
   return <div className={`knowledge-shell${evidence.data ? " has-evidence" : ""}${treeVisible ? " is-tree-visible" : ""}`}>
     <DocumentPanel inert={compact && !!evidence.data} teamId={team.id} knowledgeBaseId={library.id} documents={documents} loading={loading} canDelete={team.role === "admin"} onChanged={refresh} onError={report} />
     <main id="workspace-main" className="knowledge-main" tabIndex={-1} inert={compact && !!evidence.data}>
       <h1 className="sr-only">{library.name}</h1>
-      <div className="knowledge-toolbar"><div className="knowledge-mode-switch" aria-label="工作模式"><button type="button" aria-pressed={mode === "ask"} onClick={() => switchMode("ask")}><Icon name="quote" size={16} />问答</button><button type="button" aria-pressed={mode === "analysis"} onClick={() => switchMode("analysis")}><Icon name="book" size={16} />分析</button></div><button type="button" className="tree-toggle" aria-expanded={treeVisible} onClick={() => setTreeVisible((value) => !value)}><Icon name="folder" size={16} />资料</button></div>
-      {mode === "ask" ? <AskPanel teamId={team.id} knowledgeBaseId={library.id} canAsk={documents.some((doc) => doc.status === "ready")} processing={processing} onError={report} /> : <AnalysisPanel teamId={team.id} teamName={team.name} knowledgeBaseId={library.id} knowledgeBaseName={library.name} documents={documents} onError={report} />}
+      <div className="knowledge-toolbar"><div className="knowledge-mode-switch" aria-label="工作模式"><button type="button" aria-pressed={mode === "ask"} onClick={() => switchMode("ask")}><Icon name="quote" size={16} />问答</button><button type="button" aria-pressed={mode === "analysis"} onClick={() => switchMode("analysis")}><Icon name="book" size={16} />分析</button><button type="button" aria-pressed={mode === "notes"} onClick={() => switchMode("notes")}><Icon name="edit" size={16} />笔记</button><button type="button" aria-pressed={mode === "reports"} onClick={() => switchMode("reports")}><Icon name="file" size={16} />报告</button></div><button type="button" className="tree-toggle" aria-expanded={treeVisible} onClick={() => setTreeVisible((value) => !value)}><Icon name="folder" size={16} />资料</button></div>
+      {mode === "ask" ? <AskPanel teamId={team.id} knowledgeBaseId={library.id} documents={documents} canAsk={documents.some((doc) => doc.status === "ready")} processing={processing} onError={report} /> : mode === "analysis" ? <AnalysisPanel teamId={team.id} teamName={team.name} knowledgeBaseId={library.id} knowledgeBaseName={library.name} documents={documents} onError={report} onReportCreated={(reportId) => { setActiveReportId(reportId); switchMode("reports"); }} /> : mode === "notes" ? <NotesPanel teamId={team.id} knowledgeBaseId={library.id} documents={documents} onError={report} /> : <ReportsPanel teamId={team.id} knowledgeBaseId={library.id} documents={documents} initialReportId={activeReportId} onError={report} onPersistenceChange={setReportsDirty} />}
     </main>
     <EvidenceDrawer teamId={team.id} />
   </div>;
