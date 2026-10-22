@@ -22,32 +22,47 @@ def enqueue_document_task(session: Session, document: Document) -> ProcessingTas
     return task
 
 
-def claim_next_task(session: Session) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID] | None:
-    """通过受限函数领取任务，返回 (task_id, team_id, lease_token)。
+def claim_next_task(
+    session: Session,
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID | None, uuid.UUID] | None:
+    """通过受限函数领取任务，返回 (task_id, team_id, owner_id, lease_token)。
 
-    领取本身由数据库函数在受限角色之外完成；调用方必须随后设置团队上下文，
-    否则后续读写会被行级安全拒绝。
+    领取本身由数据库函数在受限角色之外完成；调用方必须随后恢复团队与上传者
+    上下文，否则知识库级行安全会拒绝后续读写。
     """
     row = session.execute(
-        text("select task_id, team_id, lease_token from app_claim_task(:lease_seconds)"),
+        text(
+            "select task_id, team_id, owner_id, lease_token "
+            "from app_claim_task(:lease_seconds)"
+        ),
         {"lease_seconds": LEASE_SECONDS},
     ).one_or_none()
     if row is None:
         return None
-    return row.task_id, row.team_id, row.lease_token
+    return row.task_id, row.team_id, row.owner_id, row.lease_token
 
 
-def reclaim_expired_tasks(session: Session) -> list[tuple[uuid.UUID, uuid.UUID, bool]]:
-    """回收过期租约，返回 (task_id, team_id, 是否已耗尽尝试次数)。"""
+def reclaim_expired_tasks(
+    session: Session,
+) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID | None, bool]]:
+    """回收过期租约，返回 (task_id, team_id, owner_id, 是否耗尽)。"""
     rows = session.execute(
-        text("select task_id, team_id, exhausted from app_reclaim_tasks()")
+        text("select task_id, team_id, owner_id, exhausted from app_reclaim_tasks()")
     ).all()
-    return [(row.task_id, row.team_id, bool(row.exhausted)) for row in rows]
+    return [
+        (row.task_id, row.team_id, row.owner_id, bool(row.exhausted))
+        for row in rows
+    ]
 
 
-def mark_exhausted_failed(session: Session, team_id: uuid.UUID, task_id: uuid.UUID) -> None:
+def mark_exhausted_failed(
+    session: Session,
+    team_id: uuid.UUID,
+    task_id: uuid.UUID,
+    owner_id: uuid.UUID | None = None,
+) -> None:
     """回收时发现尝试次数耗尽：把任务与文档一起置为失败。"""
-    apply_context(session, team_id=team_id)
+    apply_context(session, team_id=team_id, user_id=owner_id)
     task = session.get(ProcessingTask, task_id)
     if task is None:
         return

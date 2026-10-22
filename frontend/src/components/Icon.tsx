@@ -11,6 +11,7 @@ import {
   IconFolder,
   IconHome,
   IconInfoCircle,
+  IconLock,
   IconLogout,
   IconPencil,
   IconPlus,
@@ -25,6 +26,7 @@ import {
 
 type IconName =
   | "book"
+  | "lock"
   | "file"
   | "upload"
   | "send"
@@ -66,6 +68,7 @@ const icons: Record<IconName, ComponentType<TablerIconProps>> = {
   user: IconUser,
   back: IconArrowLeft,
   book: IconBook2,
+  lock: IconLock,
   file: IconFile,
   upload: IconUpload,
   send: IconSend,

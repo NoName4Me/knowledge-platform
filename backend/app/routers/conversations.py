@@ -24,6 +24,7 @@ from app.conversations import (
     validate_document_scope,
 )
 from app.db import apply_context, get_session
+from app.knowledge_base_access import require_knowledge_base
 from app.models import Conversation, KnowledgeBase, Turn
 from app.ratelimit import FixedWindowLimiter, enforce_rate_limit
 from app.schemas import (
@@ -65,10 +66,10 @@ def _close_stale_turns(session: Session, conversation_id: uuid.UUID) -> None:
 def _knowledge_base(
     session: Session, context: TeamContext, knowledge_base_id: uuid.UUID
 ) -> KnowledgeBase:
-    kb = session.get(KnowledgeBase, knowledge_base_id)
-    if kb is None or kb.team_id != context.team.id:
-        raise HTTPException(status_code=404, detail="知识库不存在")
-    return kb
+    knowledge_base, _permission = require_knowledge_base(
+        session, context, knowledge_base_id
+    )
+    return knowledge_base
 
 
 @router.post("/conversations", response_model=ConversationOut, status_code=201)

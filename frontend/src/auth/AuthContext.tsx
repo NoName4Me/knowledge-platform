@@ -11,7 +11,7 @@ import {
 import { api, type MeResponse } from "../lib/api";
 
 type AuthState = {
-  status: "loading" | "anonymous" | "authenticated";
+  status: "loading" | "anonymous" | "authenticated" | "password_change_required";
   session: MeResponse | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -27,11 +27,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     api
-      .me()
+      .authSnapshot()
       .then((data) => {
         if (cancelled) return;
-        setSession(data);
-        setStatus("authenticated");
+        setSession(data.session);
+        setStatus(data.status);
       })
       .catch(() => {
         if (cancelled) return;
@@ -45,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const data = await api.login(email, password);
     setSession(data);
-    setStatus("authenticated");
+    setStatus(data.user.must_change_password ? "password_change_required" : "authenticated");
   }, []);
 
   const logout = useCallback(async () => {
@@ -55,9 +55,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
-    const data = await api.me();
-    setSession(data);
-    setStatus("authenticated");
+    const data = await api.authSnapshot();
+    setSession(data.session);
+    setStatus(data.status);
   }, []);
 
   const value = useMemo(

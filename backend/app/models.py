@@ -37,7 +37,10 @@ def _uuid() -> uuid.UUID:
     return uuid.uuid4()
 
 
-TEAM_ROLES = ("admin", "member")
+TEAM_ROLES = ("admin", "member", "viewer")
+KNOWLEDGE_BASE_VISIBILITIES = ("team", "private")
+KNOWLEDGE_BASE_PERMISSIONS = ("view", "edit", "manage")
+TEAM_KB_PERMISSIONS = ("inherit", *KNOWLEDGE_BASE_PERMISSIONS)
 
 
 class User(Base):
@@ -48,6 +51,8 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(120))
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(default=True)
+    is_platform_admin: Mapped[bool] = mapped_column(default=False, server_default="false")
+    must_change_password: Mapped[bool] = mapped_column(default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     memberships: Mapped[list[TeamMembership]] = relationship(back_populates="user")
@@ -58,6 +63,9 @@ class Team(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(String(500))
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true")
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     memberships: Mapped[list[TeamMembership]] = relationship(back_populates="team")
@@ -68,7 +76,7 @@ class TeamMembership(Base):
     __tablename__ = "team_memberships"
     __table_args__ = (
         UniqueConstraint("team_id", "user_id", name="uq_team_membership"),
-        CheckConstraint("role in ('admin', 'member')", name="ck_membership_role"),
+        CheckConstraint("role in ('admin', 'member', 'viewer')", name="ck_membership_role"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -97,10 +105,50 @@ class KnowledgeBase(Base):
     team_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), index=True
     )
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     name: Mapped[str] = mapped_column(String(200))
+    visibility: Mapped[str] = mapped_column(
+        String(20), default="team", server_default="team"
+    )
+    team_permission: Mapped[str] = mapped_column(
+        String(20), default="inherit", server_default="inherit"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     team: Mapped[Team] = relationship(back_populates="knowledge_bases")
+
+
+class KnowledgeBaseAccess(Base):
+    """Explicit per-member permission inside one team knowledge base."""
+
+    __tablename__ = "knowledge_base_access"
+    __table_args__ = (
+        UniqueConstraint("knowledge_base_id", "user_id", name="uq_kb_access_member"),
+        CheckConstraint(
+            "permission in ('view', 'edit', 'manage')",
+            name="ck_kb_access_permission",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "team_id"],
+            ["knowledge_bases.id", "knowledge_bases.team_id"],
+            ondelete="CASCADE",
+            name="fk_kb_access_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    permission: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class DocumentFolder(Base):
@@ -444,7 +492,7 @@ class TeamInvitation(Base):
 
     __tablename__ = "team_invitations"
     __table_args__ = (
-        CheckConstraint("role in ('admin', 'member')", name="ck_invitation_role"),
+        CheckConstraint("role in ('admin', 'member', 'viewer')", name="ck_invitation_role"),
         UniqueConstraint("token_hash", name="uq_invitation_token"),
     )
 
@@ -462,6 +510,27 @@ class TeamInvitation(Base):
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     accepted_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ManagementEvent(Base):
+    __tablename__ = "management_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="SET NULL"), index=True
+    )
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    action: Mapped[str] = mapped_column(String(80), index=True)
+    request_id: Mapped[str | None] = mapped_column(String(100))
+    details: Mapped[dict[str, str]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

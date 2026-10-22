@@ -36,7 +36,7 @@ def reconcile_uploads_once(session: Session, *, limit: int = 100) -> Reconciliat
     candidates = session.execute(
         text(
             """
-            select document_id, team_id
+            select document_id, team_id, context_user_id
             from app_reconcile_upload_candidates(:cutoff, :limit)
             """
         ),
@@ -46,7 +46,15 @@ def reconcile_uploads_once(session: Session, *, limit: int = 100) -> Reconciliat
     store = get_object_store()
 
     for candidate in candidates:
-        apply_context(session, team_id=candidate.team_id)
+        if candidate.context_user_id is None:
+            session.rollback()
+            result.unavailable += 1
+            continue
+        apply_context(
+            session,
+            team_id=candidate.team_id,
+            user_id=candidate.context_user_id,
+        )
         document = session.get(Document, candidate.document_id)
         if document is None or document.status != "uploading" or document.updated_at >= cutoff:
             session.rollback()

@@ -17,6 +17,7 @@ import { AnswerWithEvidence, StreamingAnswer } from "./AnswerWithEvidence";
 import { turnEvidence } from "../lib/citation-text";
 import { documentLabel } from "../lib/document-label";
 import { useEvidence } from "../lib/evidence-context";
+import { randomId } from "../lib/random-id";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
 import { SelectMenu } from "./Popover";
@@ -174,7 +175,7 @@ export function AskPanel({
         setActiveId(created.id);
       }
 
-      requestId = crypto.randomUUID();
+      requestId = randomId();
       const currentRequestId = requestId;
       startTransition(() => {
         setTurns((items) => {

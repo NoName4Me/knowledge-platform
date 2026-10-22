@@ -31,7 +31,8 @@ type Props = {
   knowledgeBaseId: string;
   documents: DocumentItem[];
   loading: boolean;
-  canDelete: boolean;
+  canAddDocuments: boolean;
+  canManageDocuments: boolean;
   onChanged: () => Promise<void>;
   onError: (message: string) => void;
 };
@@ -107,7 +108,8 @@ export function DocumentPanel({
   knowledgeBaseId,
   documents,
   loading,
-  canDelete,
+  canAddDocuments,
+  canManageDocuments,
   onChanged,
   onError,
 }: Props) {
@@ -414,7 +416,7 @@ export function DocumentPanel({
     drag: DragTarget,
     target: TreeDrop,
   ) {
-    if (!canDelete || busy) return;
+    if (!canManageDocuments || busy) return;
     const source = drag.drag;
     const siblings = childrenOf(folders, documents, drag.parentId);
     let parentId = drag.parentId;
@@ -531,7 +533,7 @@ export function DocumentPanel({
       targetId: string;
     },
   ) {
-    if (!drag || !canDelete || busy) return;
+    if (!drag || !canManageDocuments || busy) return;
     event.preventDefault();
     event.stopPropagation();
     setGapTarget(null);
@@ -595,7 +597,7 @@ export function DocumentPanel({
       >
         <div
           className="tree-folder__row"
-          draggable={canDelete && busy === null}
+          draggable={canManageDocuments && busy === null}
           onDragStart={(event) => startDrag(event, "folder", folder.id, parentId, index)}
           onDragEnd={() => { setDrag(null); setDropTarget(null); setGapTarget(null); }}
           onDragOver={(event) => dragOverItem(event, {
@@ -634,17 +636,19 @@ export function DocumentPanel({
             <span>{folder.name}</span>
             <small>{folderDocuments(documents, folder.id).length}</small>
           </button>
-          {canDelete && (
+          {(canAddDocuments || canManageDocuments) && (
             <div className="tree-folder__actions">
-              <button
-                type="button"
-                className="tree-quick-action"
-                aria-label={`在 ${folder.name} 中新建目录`}
-                title="新建目录"
-                onClick={() => setNameDialog({ mode: "create", parentId: folder.id })}
-              >
-                <Icon name="plus" size={15} />
-              </button>
+              {canManageDocuments && (
+                <button
+                  type="button"
+                  className="tree-quick-action"
+                  aria-label={`在 ${folder.name} 中新建目录`}
+                  title="新建目录"
+                  onClick={() => setNameDialog({ mode: "create", parentId: folder.id })}
+                >
+                  <Icon name="plus" size={15} />
+                </button>
+              )}
               <PopoverMenu
                 label={`管理目录 ${folder.name}`}
                 className="tree-menu"
@@ -654,8 +658,10 @@ export function DocumentPanel({
                   <button type="button" role="menuitem" onClick={() => { close(); chooseUploadTarget(folder.id); }}><IconUpload size={15} stroke={1.7} aria-hidden="true" />上传资料</button>
                   <button type="button" role="menuitem" onClick={() => { close(); expandFolder(folder.id); setTextFolderId(folder.id); setCreatingText(true); }}><IconClipboardText size={15} stroke={1.7} aria-hidden="true" />粘贴文字</button>
                   <button type="button" role="menuitem" onClick={() => { close(); expandFolder(folder.id); setWebFolderId(folder.id); setCreatingWeb(true); }}><IconWorld size={15} stroke={1.7} aria-hidden="true" />导入网页</button>
-                  <button type="button" role="menuitem" onClick={() => { close(); setNameDialog({ mode: "rename", parentId: folder.parent_id, folder }); }}><IconPencil size={15} stroke={1.7} aria-hidden="true" />重命名</button>
-                  <button type="button" role="menuitem" className="is-danger" disabled={busy !== null} onClick={() => { close(); setConfirming({ kind: "folder", folder }); }}><IconTrash size={15} stroke={1.7} aria-hidden="true" />删除</button>
+                  {canManageDocuments && <>
+                    <button type="button" role="menuitem" onClick={() => { close(); setNameDialog({ mode: "rename", parentId: folder.parent_id, folder }); }}><IconPencil size={15} stroke={1.7} aria-hidden="true" />重命名</button>
+                    <button type="button" role="menuitem" className="is-danger" disabled={busy !== null} onClick={() => { close(); setConfirming({ kind: "folder", folder }); }}><IconTrash size={15} stroke={1.7} aria-hidden="true" />删除</button>
+                  </>}
                 </>}
               </PopoverMenu>
             </div>
@@ -686,7 +692,7 @@ export function DocumentPanel({
         key={document.id}
         className={`tree-document${edge ? ` is-drop-${edge}` : ""}`}
         style={{ "--tree-depth": depth } as CSSProperties}
-        draggable={canDelete && busy === null}
+        draggable={canManageDocuments && busy === null}
         onDragStart={(event) => startDrag(event, "document", document.id, parentId, index)}
         onDragEnd={() => { setDrag(null); setDropTarget(null); setGapTarget(null); }}
         onDragOver={(event) => dragOverItem(event, {
@@ -713,12 +719,12 @@ export function DocumentPanel({
             {STATUS_LABEL[document.status]}
           </small>
         </button>
-        {document.status === "failed" && (
+        {document.status === "failed" && canAddDocuments && (
           <button type="button" className="doc-action" onClick={() => void retryDocument(document)} disabled={busy !== null}>
             重试
           </button>
         )}
-        {canDelete && (
+        {canManageDocuments && (
           <PopoverMenu label={`管理资料 ${document.filename}`} className="tree-menu" trigger={<Icon name="more" size={15} />}>
             {(close) => <>
               <button type="button" role="menuitem" onClick={() => { close(); setDocumentEdit(document); }}><IconPencil size={15} stroke={1.7} aria-hidden="true" />重命名</button>
@@ -864,7 +870,7 @@ export function DocumentPanel({
             <small>{documents.length}</small>
           </button>
           <div className="tree-root__actions">
-            {canDelete && (
+            {canManageDocuments && (
               <button
                 type="button"
                 className="tree-quick-action"
@@ -881,10 +887,12 @@ export function DocumentPanel({
               trigger={<Icon name="more" size={15} />}
             >
               {(close) => <>
-                <button type="button" role="menuitem" onClick={() => { close(); chooseUploadTarget(null); }}><IconUpload size={15} stroke={1.7} aria-hidden="true" />上传资料</button>
-                <button type="button" role="menuitem" onClick={() => { close(); setTextFolderId(null); setCreatingText(true); }}><IconClipboardText size={15} stroke={1.7} aria-hidden="true" />粘贴文字</button>
-                <button type="button" role="menuitem" onClick={() => { close(); setWebFolderId(null); setCreatingWeb(true); }}><IconWorld size={15} stroke={1.7} aria-hidden="true" />导入网页</button>
-                {canDelete && <button type="button" role="menuitem" onClick={() => { close(); setNameDialog({ mode: "create", parentId: null }); }}><IconFolderPlus size={15} stroke={1.7} aria-hidden="true" />新建目录</button>}
+                {canAddDocuments && <>
+                  <button type="button" role="menuitem" onClick={() => { close(); chooseUploadTarget(null); }}><IconUpload size={15} stroke={1.7} aria-hidden="true" />上传资料</button>
+                  <button type="button" role="menuitem" onClick={() => { close(); setTextFolderId(null); setCreatingText(true); }}><IconClipboardText size={15} stroke={1.7} aria-hidden="true" />粘贴文字</button>
+                  <button type="button" role="menuitem" onClick={() => { close(); setWebFolderId(null); setCreatingWeb(true); }}><IconWorld size={15} stroke={1.7} aria-hidden="true" />导入网页</button>
+                </>}
+                {canManageDocuments && <button type="button" role="menuitem" onClick={() => { close(); setNameDialog({ mode: "create", parentId: null }); }}><IconFolderPlus size={15} stroke={1.7} aria-hidden="true" />新建目录</button>}
               </>}
             </PopoverMenu>
           </div>
@@ -1042,7 +1050,7 @@ export function DocumentPanel({
               </p>
             )}
             <div className="maintenance-actions">
-              {canDelete && (
+              {canManageDocuments && (
                 <button
                   className="btn btn--ghost"
                   type="button"
@@ -1064,7 +1072,7 @@ export function DocumentPanel({
                 <Icon name="external" size={15} />
               </a>
             </div>
-            {canDelete && (
+            {canManageDocuments && (
               <div className="document-replace">
                 <input
                   ref={replaceInput}

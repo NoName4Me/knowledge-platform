@@ -21,12 +21,26 @@ class UserOut(BaseModel):
     id: uuid.UUID
     email: str
     display_name: str
+    is_platform_admin: bool = False
+    must_change_password: bool = False
 
 
 class TeamSummary(BaseModel):
     id: uuid.UUID
     name: str
     role: str
+    description: str | None = None
+
+
+class ProfileUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    display_name: str = Field(min_length=1, max_length=120)
+
+
+class PasswordChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class MeOut(BaseModel):
@@ -44,7 +58,7 @@ class MemberOut(BaseModel):
 
 class InvitationCreate(BaseModel):
     email: EmailStr
-    role: str = Field(default="member", pattern="^(admin|member)$")
+    role: str = Field(default="viewer", pattern="^(admin|member|viewer)$")
 
 
 class InvitationOut(BaseModel):
@@ -68,6 +82,7 @@ class InvitationPreviewOut(BaseModel):
     status: str
     team_name: str | None
     email_masked: str | None
+    email: str | None = None
 
 
 class InvitationAcceptRequest(BaseModel):
@@ -83,6 +98,17 @@ class RegisterWithInvitationRequest(BaseModel):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=8, max_length=128)
+
+
+class TeamUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class MemberRoleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["admin", "member", "viewer"]
 
 
 class DocumentOut(BaseModel):

@@ -27,6 +27,7 @@ export function InvitePage({ token, onDone }: Props) {
     api.previewInvitation(token).then((data) => {
       if (cancelled) return;
       setPreview(data);
+      if (data.status === "ok" && data.email) setEmail(data.email);
     }).catch((err) => {
       if (!cancelled) setError(err instanceof ApiError ? err.message : "无法读取邀请");
     });
@@ -96,7 +97,7 @@ export function InvitePage({ token, onDone }: Props) {
               <p className="invite__section">首次使用，设置你的账号</p>
               <div className="field">
                 <label htmlFor="invite-email">邮箱</label>
-                <input id="invite-email" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                <input id="invite-email" type="email" autoComplete="username" value={email} readOnly disabled required />
               </div>
               <div className="field">
                 <label htmlFor="invite-name">姓名</label>
@@ -113,7 +114,7 @@ export function InvitePage({ token, onDone }: Props) {
               <form className="login__form" onSubmit={accept} aria-busy={busy}>
                 <div className="field">
                   <label htmlFor="accept-email">邮箱</label>
-                  <input id="accept-email" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                  <input id="accept-email" type="email" autoComplete="username" value={email} readOnly disabled required />
                 </div>
                 <div className="field">
                   <label htmlFor="accept-password">密码</label>

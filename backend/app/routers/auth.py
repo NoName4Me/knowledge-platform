@@ -12,10 +12,19 @@ from app.csrf import issue_prelogin_token
 from app.db import apply_context, get_session
 from app.models import SessionToken, User
 from app.ratelimit import FixedWindowLimiter, enforce_rate_limit
-from app.schemas import CsrfOut, LoginRequest, MeOut, TeamSummary, UserOut
+from app.schemas import (
+    CsrfOut,
+    LoginRequest,
+    MeOut,
+    PasswordChange,
+    ProfileUpdate,
+    TeamSummary,
+    UserOut,
+)
 from app.security import (
     derive_csrf_token,
     generate_session_token,
+    hash_password,
     hash_session_token,
     verify_password,
 )
@@ -31,7 +40,13 @@ ip_login_limiter = FixedWindowLimiter(
 
 
 def _to_user_out(user: User) -> UserOut:
-    return UserOut(id=user.id, email=user.email, display_name=user.display_name)
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        is_platform_admin=user.is_platform_admin,
+        must_change_password=user.must_change_password,
+    )
 
 
 def _teams_for_user(session: Session, user: User) -> list[TeamSummary]:
@@ -43,6 +58,7 @@ def _teams_for_user(session: Session, user: User) -> list[TeamSummary]:
             from team_memberships m
             join my_teams v on v.id = m.team_id
             where m.user_id = :user_id
+              and v.is_active
             order by v.name
             """
         ),
@@ -147,3 +163,35 @@ def me(
         teams=_teams_for_user(session, user),
         csrf_token=derive_csrf_token(raw_token, settings.secret_key),
     )
+
+
+@router.patch("/profile", response_model=UserOut)
+def update_profile(
+    payload: ProfileUpdate,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> UserOut:
+    user.display_name = payload.display_name
+    session.commit()
+    return _to_user_out(user)
+
+
+@router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    payload: PasswordChange,
+    response: Response,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> None:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="当前密码不正确")
+    if payload.new_password == "user1234":
+        raise HTTPException(status_code=422, detail="新密码不能使用临时密码")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(status_code=422, detail="新密码不能与当前密码相同")
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
+    session.execute(delete(SessionToken).where(SessionToken.user_id == user.id))
+    session.commit()
+    response.delete_cookie(settings.session_cookie_name, path="/")
+    response.delete_cookie(settings.csrf_cookie_name, path="/")

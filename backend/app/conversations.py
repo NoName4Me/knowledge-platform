@@ -322,17 +322,11 @@ def _ensure_publish_access(
     turn: Turn,
 ) -> Conversation:
     """最终发布前重新读取授权事实，防止长连接沿用生成开始时的身份。"""
-    membership = session.execute(
-        text(
-            """
-            select 1
-            from team_memberships
-            where team_id = :team_id and user_id = :user_id
-            """
-        ),
-        {"team_id": context.team.id, "user_id": context.user.id},
-    ).one_or_none()
-    if membership is None:
+    permission = session.execute(
+        text("select app_kb_permission(:kb_id, :user_id)"),
+        {"kb_id": knowledge_base_id, "user_id": context.user.id},
+    ).scalar_one_or_none()
+    if permission is None:
         raise AccessRevoked
     try:
         return get_owned_conversation(session, context, knowledge_base_id, turn.conversation_id)
@@ -361,13 +355,20 @@ def _mark_failed(
 ) -> None:
     session.rollback()
     _restore_rls_context(session, context)
-    failed = session.get(Turn, turn_id)
-    if failed is not None:
-        failed.status = "failed"
-        failed.error_code = error_code
-        failed.answer_draft = None
-        failed.finished_at = datetime.now(UTC)
-        session.commit()
+    # 访问撤销后，普通 turn UPDATE 会被知识库 RLS 隐藏。由窄范围维护函数
+    # 只清理当前创建者仍在生成中的轮次，不返回任何业务内容。
+    session.execute(
+        text(
+            "select app_fail_revoked_turn("
+            ":turn_id, :user_id, :error_code)"
+        ),
+        {
+            "turn_id": turn_id,
+            "user_id": context.user.id,
+            "error_code": error_code,
+        },
+    )
+    session.commit()
 
 
 def _publish_answer(
@@ -519,6 +520,7 @@ def stream_answer(
             buffer.append(piece)
             # 草稿按块落库：断流后重新读取可看到已生成内容。
             turn.answer_draft = "".join(buffer)
+            _ensure_publish_access(session, context, knowledge_base_id, turn)
             session.commit()
             _restore_rls_context(session, context)
             current_turn = session.get(Turn, turn.id)
@@ -528,6 +530,12 @@ def stream_answer(
             yield TurnStreamEvent(type="delta", text=piece)
     except ConversationNotFound:
         raise
+    except AccessRevoked:
+        _mark_failed(session, context, turn.id, "ACCESS_REVOKED")
+        yield TurnStreamEvent(
+            type="error", error_code="ACCESS_REVOKED", message="当前访问权限已失效"
+        )
+        return
     except Exception:  # noqa: BLE001
         _mark_failed(session, context, turn.id, "MODEL_UNAVAILABLE")
         yield TurnStreamEvent(type="error", error_code="MODEL_UNAVAILABLE", message="生成中断")

@@ -16,7 +16,7 @@ from tests.conftest import add_member, make_team, make_user
 
 
 def _team_with_kb(client, session, email: str = "owner@example.com", role: str = "admin"):
-    """建好团队与知识库；知识库只能管理员创建，因此先以管理员身份创建再降级。"""
+    """建好团队与知识库；需要时先作为管理员创建，再验证降级后的权限。"""
     from app.models import TeamMembership
 
     user = make_user(session, email)
@@ -457,6 +457,46 @@ def test_member_removal_stops_publication(client, session):
         ).all()
         == []
     )
+
+
+def test_queued_analysis_converges_when_knowledge_base_access_is_revoked(
+    client, session
+):
+    user, team, kb_id = _team_with_kb(
+        client, session, "revoked-analysis@example.com", role="member"
+    )
+    document = _upload_ready(client, session, team.id, kb_id, "交通费用凭有效票据报销。")
+    created = _create(client, team.id, kb_id, document["id"]).json()
+
+    from app.models import AnalysisDocument, AnalysisTask, TeamMembership
+
+    membership = session.scalars(
+        select(TeamMembership).where(
+            TeamMembership.team_id == team.id,
+            TeamMembership.user_id == user.id,
+        )
+    ).one()
+    session.delete(membership)
+    session.commit()
+
+    from app.db import apply_context
+
+    apply_context(session, user_id=user.id, team_id=team.id)
+    changed = session.scalar(
+        text("select app_revoke_inaccessible_knowledge_work()")
+    )
+    session.commit()
+    assert changed and changed >= 2
+
+    task = session.get(AnalysisTask, uuid.UUID(created["id"]))
+    assert task is not None
+    assert task.status == "failed"
+    assert task.error_code == "ANALYSIS_PERMISSION_REVOKED"
+    assert (
+        session.scalars(
+            select(AnalysisDocument).where(AnalysisDocument.task_id == task.id)
+        ).all()
+    )[0].status == "failed"
 
 
 def test_stale_lease_cannot_publish(client, session):

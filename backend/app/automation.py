@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from fastapi import HTTPException
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from app.analysis_contract import AnalysisError, validate_create_request, valida
 from app.auth import TeamContext
 from app.config import get_settings
 from app.db import apply_context
+from app.knowledge_base_access import require_knowledge_base
 from app.models import (
     AnalysisDocument,
     AnalysisSummary,
@@ -31,7 +33,6 @@ from app.models import (
     KnowledgeBase,
     Report,
     Team,
-    TeamMembership,
     User,
 )
 from app.schemas import (
@@ -113,10 +114,15 @@ def _fingerprint(payload: AutomationCreateRequest) -> str:
 def _knowledge_base(
     session: Session, context: TeamContext, knowledge_base_id: uuid.UUID
 ) -> KnowledgeBase:
-    kb = session.get(KnowledgeBase, knowledge_base_id)
-    if kb is None or kb.team_id != context.team.id:
-        raise AutomationSourceUnavailable("知识库不存在")
-    return kb
+    try:
+        knowledge_base, _permission = require_knowledge_base(
+            session, context, knowledge_base_id
+        )
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            raise AutomationSourceUnavailable(str(exc.detail)) from exc
+        raise AutomationSourceUnavailable("知识库不存在") from exc
+    return knowledge_base
 
 
 def _validate_sources(
@@ -549,7 +555,12 @@ def request_continue(
         knowledge_base_id=item.knowledge_base_id,
         document_ids=[uuid.UUID(value) for value in item.document_ids],
     )
-    if not analysis.is_member(session, item.team_id, item.created_by_id):
+    if not analysis.can_access_knowledge_base(
+        session,
+        team_id=item.team_id,
+        user_id=item.created_by_id,
+        knowledge_base_id=item.knowledge_base_id,
+    ):
         raise AutomationError("当前账号已不能继续这项执行")
     if item.error_code == "AUTOMATION_ANALYSIS_FAILED":
         # V2 终态分析通过新任务重跑；旧任务及其步骤 ID 保留在步骤历史中。
@@ -698,14 +709,11 @@ def _close_open_step(
 
 
 def _check_owner(session: Session, item: KnowledgeAutomation) -> bool:
-    return (
-        session.scalar(
-            select(TeamMembership.id).where(
-                TeamMembership.team_id == item.team_id,
-                TeamMembership.user_id == item.created_by_id,
-            )
-        )
-        is not None
+    return analysis.can_access_knowledge_base(
+        session,
+        team_id=item.team_id,
+        user_id=item.created_by_id,
+        knowledge_base_id=item.knowledge_base_id,
     )
 
 

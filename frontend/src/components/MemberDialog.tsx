@@ -3,26 +3,31 @@ import { api, ApiError, type TeamInvitation, type TeamMember } from "../lib/api"
 import { Icon } from "./Icon";
 import { SelectMenu } from "./Popover";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { copyText } from "../lib/clipboard";
 
 type Props = {
   teamId: string;
   onClose: () => void;
   onError: (message: string) => void;
+  onSuccess: (message: string) => void;
 };
 
 const message = (err: unknown, fallback: string) =>
   err instanceof ApiError ? err.message : fallback;
+const roleLabel = (role: TeamMember["role"]) =>
+  role === "admin" ? "管理员" : role === "viewer" ? "查阅成员" : "成员";
 
-export function MemberDialog({ teamId, onClose, onError }: Props) {
+export function MemberDialog({ teamId, onClose, onError, onSuccess }: Props) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [invitations, setInvitations] = useState<TeamInvitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [removing, setRemoving] = useState<string | null>(null);
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
+  const [role, setRole] = useState<TeamMember["role"]>("viewer");
   const [inviting, setInviting] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [removingMember, setRemovingMember] = useState<TeamMember | null>(null);
+  const [resettingMember, setResettingMember] = useState<TeamMember | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +57,7 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
       const result = await api.createInvitation(teamId, email.trim(), role);
       setInvitations((items) => [result.invitation, ...items]);
       setInviteLink(`${window.location.origin}/invite/${result.token}`);
+      onSuccess("邀请已创建");
       setEmail("");
     } catch (err) {
       onError(message(err, "创建邀请失败"));
@@ -62,11 +68,9 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
 
   async function copyInviteLink() {
     if (!inviteLink) return;
-    try {
-      await navigator.clipboard.writeText(inviteLink);
-    } catch {
-      onError("复制失败，请手动选择链接复制");
-    }
+    const copied = await copyText(inviteLink);
+    if (copied) onSuccess("邀请链接已复制");
+    else onError("浏览器阻止了复制，请选择链接后按 Cmd+C");
   }
 
   async function revoke(invitation: TeamInvitation) {
@@ -87,6 +91,28 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
       throw new Error(message(err, "移除成员失败"));
     } finally {
       setRemoving(null);
+    }
+  }
+
+  async function changeRole(member: TeamMember, nextRole: TeamMember["role"]) {
+    if (member.role === nextRole) return;
+    try {
+      const updated = await api.updateMemberRole(teamId, member.user_id, nextRole);
+      setMembers((items) =>
+        items.map((item) => (item.user_id === member.user_id ? updated : item)),
+      );
+    } catch (err) {
+      onError(message(err, "调整成员角色失败"));
+    }
+  }
+
+  async function resetPassword() {
+    if (!resettingMember) return;
+    try {
+      await api.resetMemberPassword(teamId, resettingMember.user_id);
+      onSuccess(`已将 ${resettingMember.display_name} 的密码重置为 user1234`);
+    } catch (err) {
+      throw new Error(message(err, "重置密码失败"));
     }
   }
 
@@ -132,8 +158,9 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
               className="invite-role-select"
               label="成员角色"
               value={role}
-              onChange={(value) => setRole(value as "admin" | "member")}
+              onChange={(value) => setRole(value as TeamMember["role"])}
               options={[
+                { id: "viewer", label: "查阅成员" },
                 { id: "member", label: "成员" },
                 { id: "admin", label: "管理员" },
               ]}
@@ -144,7 +171,12 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
           </div>
           {inviteLink && (
             <div className="invite-link" role="status">
-              <span>{inviteLink}</span>
+              <input
+                aria-label="邀请链接"
+                readOnly
+                value={inviteLink}
+                onFocus={(event) => event.currentTarget.select()}
+              />
               <button type="button" className="btn btn--ghost" onClick={() => void copyInviteLink()}>
                 复制链接
               </button>
@@ -162,16 +194,34 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
                   <strong>{member.display_name}</strong>
                   <small>{member.email}</small>
                 </span>
-                <span className="member-row__role">
-                  {member.role === "admin" ? "管理员" : "成员"}
-                </span>
-                <button
-                  className="btn btn--ghost member-row__remove"
-                  disabled={removing !== null}
-                  onClick={() => setRemovingMember(member)}
-                >
-                  移除
-                </button>
+                <SelectMenu
+                  className="invite-role-select"
+                  label={`${member.display_name}的角色`}
+                  value={member.role}
+                  onChange={(value) =>
+                    void changeRole(member, value as TeamMember["role"])
+                  }
+                  options={[
+                    { id: "viewer", label: "查阅成员" },
+                    { id: "member", label: "成员" },
+                    { id: "admin", label: "管理员" },
+                  ]}
+                />
+                <div className="member-row__actions">
+                  <button
+                    className="btn btn--ghost member-row__action"
+                    onClick={() => setResettingMember(member)}
+                  >
+                    重置密码
+                  </button>
+                  <button
+                    className="btn btn--ghost member-row__action"
+                    disabled={removing !== null}
+                    onClick={() => setRemovingMember(member)}
+                  >
+                    移除
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -185,7 +235,7 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
                   <span>
                     <strong>{invitation.email}</strong>
                     <small>
-                      {invitation.role === "admin" ? "管理员" : "成员"} ·{" "}
+                      {roleLabel(invitation.role)} ·{" "}
                       {new Date(invitation.expires_at).toLocaleDateString("zh-CN")} 到期
                     </small>
                   </span>
@@ -208,6 +258,21 @@ export function MemberDialog({ teamId, onClose, onError }: Props) {
               <p>{removingMember.display_name} 将无法继续访问本团队的资料、问答与分析。</p>
               <p>其已创建的私人问答和分析记录会保留，但本人不再可见。</p>
             </>}
+          />
+        )}
+        {resettingMember && (
+          <ConfirmDialog
+            title={`重置 ${resettingMember.display_name} 的密码？`}
+            confirmLabel="重置为 user1234"
+            tone="danger"
+            onClose={() => setResettingMember(null)}
+            onConfirm={resetPassword}
+            description={
+              <>
+                <p>该成员在所有团队中的旧会话都会失效。</p>
+                <p>下次登录必须先把临时密码修改为自己的密码。</p>
+              </>
+            }
           />
         )}
       </section>

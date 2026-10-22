@@ -44,14 +44,16 @@ def test_unknown_team_returns_403_not_404(client, session):
     assert resp.status_code == 403
 
 
-def test_member_cannot_create_knowledge_base(client, session):
+def test_member_can_create_knowledge_base(client, session):
     user = make_user(session, "a@example.com")
     team = make_team(session, "团队A")
     add_member(session, team, user, role="member")
     client.post("/api/auth/login", json={"email": "a@example.com", "password": "password123"})
 
     resp = client.post(f"/api/teams/{team.id}/knowledge-bases", json={"name": "制度库"})
-    assert resp.status_code == 403
+    assert resp.status_code == 201
+    assert resp.json()["permission"] == "manage"
+    assert resp.json()["owner_id"] == str(user.id)
 
 
 def test_admin_can_create_knowledge_base(client, session):

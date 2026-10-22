@@ -267,6 +267,7 @@ KP_BOOTSTRAP_PASSWORD='强密码' docker compose exec -e KP_BOOTSTRAP_PASSWORD a
 
 ## 后续实施
 
+- V5：账号、团队与权限管理已实现并通过完整自动化回归与浏览器验收。先读 [V5 范围与权限矩阵](V5-SCOPE.md) 和 [V5 实施计划](docs/implementation/V5-TASKS.md)；包含平台创建/停用团队、三种固定团队角色、团队设置、个人资料、退出团队，以及平台管理员和团队管理员固定重置为 `user1234` 的密码闭环。
 - V1：先读 [实施指导](docs/architecture/README.md)，再按 [任务清单](docs/implementation/V1-TASKS.md) 完成小切片。文档团队共享，问答历史仅本人可见；目标设计与已验证能力需分别记录。
 - V2：功能闭环与替身验收已完成，真实模型质量验收待配置分析模型后执行。先读 [范围与验收基线](V2-SCOPE.md)、[分析实施指导](docs/architecture/V2-ANALYSIS.md) 与 [V2 任务清单](docs/implementation/V2-TASKS.md)；量化质量目标仍待确认。
 - V3：主流程已完成，范围、验证结果与保留边界见 [阶段规划与完成记录](docs/implementation/V3-PLAN.md)。正式质量评测与发布部署验收不作为开发前置，现有未验收项继续保留记录。

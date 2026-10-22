@@ -127,11 +127,16 @@ def run_analysis_document(
         return "missing"
 
     # 调用模型前再次确认创建者仍是成员；被移除后立即停止，不继续产生结果。
-    if not analysis.is_member(session, team_id, owner_id):
+    if not analysis.can_access_knowledge_base(
+        session,
+        team_id=team_id,
+        user_id=owner_id,
+        knowledge_base_id=task.knowledge_base_id,
+    ):
         analysis.mark_permission_revoked(session, task)
         execution.status = "failed"
         execution.error_code = "ANALYSIS_PERMISSION_REVOKED"
-        execution.error_detail = "创建者已不是该团队成员"
+        execution.error_detail = "创建者已不能访问该知识库"
         execution.lease_token = None
         execution.lease_expires_at = None
         session.commit()

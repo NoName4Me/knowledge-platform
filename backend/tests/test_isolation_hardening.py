@@ -235,10 +235,18 @@ def test_runtime_role_cannot_bypass_rls(session):
     """直接执行 SQL 也必须受团队上下文限制，不能依赖路由恰好写了过滤条件。"""
     from sqlalchemy import text
 
-    from app.models import Document, KnowledgeBase
+    from app.models import Document, KnowledgeBase, TeamMembership, User
 
     team_a = make_team(session, "团队A")
     team_b = make_team(session, "团队B")
+    member = User(
+        email="rls-member@example.com",
+        display_name="成员",
+        password_hash="not-used",
+    )
+    session.add(member)
+    session.flush()
+    session.add(TeamMembership(team_id=team_a.id, user_id=member.id, role="member"))
     kb_a = KnowledgeBase(team_id=team_a.id, name="A库")
     kb_b = KnowledgeBase(team_id=team_b.id, name="B库")
     session.add_all([kb_a, kb_b])
@@ -274,8 +282,11 @@ def test_runtime_role_cannot_bypass_rls(session):
         conn.execute(text("SET ROLE kp_app"))
         assert conn.scalar(text("select count(*) from documents")) == 0
         conn.execute(
-            text("select set_config('kp.team_id', :team_id, true)"),
-            {"team_id": str(team_a.id)},
+            text(
+                "select set_config('kp.team_id', :team_id, true), "
+                "set_config('kp.user_id', :user_id, true)"
+            ),
+            {"team_id": str(team_a.id), "user_id": str(member.id)},
         )
         rows = conn.execute(text("select title from documents")).scalars().all()
         assert rows == ["A资料"]

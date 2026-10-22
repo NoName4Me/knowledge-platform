@@ -34,7 +34,7 @@ def test_each_claim_gets_new_lease_token(client, session):
     claimed = claim_next_task(session)
     session.commit()
     assert claimed is not None
-    task_id, team_id, token = claimed
+    task_id, team_id, _owner_id, token = claimed
     assert (task_id, team_id) == (first.id, team.id)
 
     session.expire_all()
@@ -45,7 +45,7 @@ def test_each_claim_gets_new_lease_token(client, session):
     second = claim_next_task(session)
     session.commit()
     assert second is not None
-    assert second[2] != token
+    assert second[3] != token
 
 
 def test_stale_worker_cannot_renew_lease(client, session):
@@ -57,7 +57,7 @@ def test_stale_worker_cannot_renew_lease(client, session):
     apply_context(session, team_id=team.id)
     claimed = claim_next_task(session)
     assert claimed is not None
-    task_id, _, old_token = claimed
+    task_id, _, _, old_token = claimed
     session.commit()
 
     session.expire_all()
@@ -70,7 +70,7 @@ def test_stale_worker_cannot_renew_lease(client, session):
     apply_context(session, team_id=team.id)
     claimed_again = claim_next_task(session)
     assert claimed_again is not None
-    _, _, new_token = claimed_again
+    _, _, _, new_token = claimed_again
     session.commit()
 
     session.expire_all()
@@ -116,7 +116,7 @@ def test_two_workers_claim_different_tasks(client, session):
 
     assert claimed_a is not None and claimed_b is not None
     assert claimed_a[0] != claimed_b[0]
-    assert claimed_a[2] != claimed_b[2]
+    assert claimed_a[3] != claimed_b[3]
 
 
 def test_stale_worker_cannot_publish_chunks(client, session):
@@ -128,7 +128,7 @@ def test_stale_worker_cannot_publish_chunks(client, session):
     apply_context(session, team_id=team.id)
     claimed = claim_next_task(session)
     assert claimed is not None
-    task_id, _, old_token = claimed
+    task_id, _, _, old_token = claimed
     session.commit()
 
     session.expire_all()
@@ -144,7 +144,7 @@ def test_stale_worker_cannot_publish_chunks(client, session):
     apply_context(session, team_id=team.id)
     claimed_again = claim_next_task(session)
     assert claimed_again is not None
-    _, _, new_token = claimed_again
+    _, _, _, new_token = claimed_again
     session.commit()
 
     stale = session.get(ProcessingTask, task_id)
@@ -180,9 +180,9 @@ def test_expired_last_attempt_marks_document_failed(client, session):
     session.commit()
 
     reclaimed = reclaim_expired_tasks(session)
-    assert reclaimed and reclaimed[0][2] is True
+    assert reclaimed and reclaimed[0][3] is True
     session.commit()
-    mark_exhausted_failed(session, team.id, task.id)
+    mark_exhausted_failed(session, team.id, task.id, reclaimed[0][2])
     session.commit()
 
     session.expire_all()

@@ -61,11 +61,16 @@ def run_analysis_summary(
     if summary is None or task is None or task.kind != "comparison":
         session.rollback()
         return "missing"
-    if not analysis.is_member(session, team_id, owner_id):
+    if not analysis.can_access_knowledge_base(
+        session,
+        team_id=team_id,
+        user_id=owner_id,
+        knowledge_base_id=task.knowledge_base_id,
+    ):
         analysis.mark_permission_revoked(session, task)
         summary.status = "failed"
         summary.error_code = "ANALYSIS_PERMISSION_REVOKED"
-        summary.error_detail = "创建者已不是该团队成员"
+        summary.error_detail = "创建者已不能访问该知识库"
         summary.lease_token = None
         summary.lease_expires_at = None
         session.commit()

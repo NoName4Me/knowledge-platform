@@ -289,7 +289,7 @@ def test_expired_lease_is_reclaimed(client, session):
     assert len(reclaimed) == 1
     assert reclaimed[0][0] == task.id
     assert reclaimed[0][1] == team.id
-    assert reclaimed[0][2] is False
+    assert reclaimed[0][3] is False
     session.expire_all()
     assert session.get(ProcessingTask, task.id).status == "queued"
 
@@ -312,12 +312,18 @@ def test_worker_cancels_claim_for_deleted_document(client, session):
     task = session.get(ProcessingTask, claimed[0])
     document = session.get(Document, doc["id"])
     assert task is not None and document is not None
-    task.lease_token = claimed[2]
+    task.lease_token = claimed[3]
     document.status = "deleted"
     session.commit()
 
     apply_context(session, team_id=team.id)
-    process_task(session, task, team.id, claimed[2])
+    process_task(
+        session,
+        task,
+        team.id,
+        claimed[3],
+        owner_id=claimed[2],
+    )
     session.commit()
 
     session.expire_all()

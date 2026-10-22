@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import TeamContext, get_team_context, require_admin
+from app.auth import TeamContext, get_team_context
 from app.config import get_settings
 from app.db import apply_context, get_session
 from app.ingestion import (
@@ -29,6 +29,11 @@ from app.ingestion import (
     mark_source_reviews,
     safe_filename,
     web_title,
+)
+from app.knowledge_base_access import (
+    knowledge_base_permission,
+    require_knowledge_base,
+    require_knowledge_base_permission,
 )
 from app.models import Document, DocumentFolder, KnowledgeBase
 from app.reconciliation import retry_failed_upload
@@ -57,14 +62,6 @@ router = APIRouter(prefix="/api/teams/{team_id}/documents", tags=["documents"])
 settings = get_settings()
 
 
-def _get_knowledge_base(session: Session, team_id: uuid.UUID, kb_id: uuid.UUID) -> KnowledgeBase:
-    # 调用方已经应用团队上下文；这里仍显式校验，避免把路径参数当作归属。
-    kb = session.get(KnowledgeBase, kb_id)
-    if kb is None or kb.team_id != team_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
-    return kb
-
-
 @router.get("", response_model=list[DocumentOut])
 def list_documents(
     team_id: uuid.UUID,
@@ -72,12 +69,22 @@ def list_documents(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> list[DocumentOut]:
+    if knowledge_base_id is not None:
+        require_knowledge_base(session, context, knowledge_base_id)
+        permitted = [knowledge_base_id]
+    else:
+        permitted = [
+            kb.id
+            for kb in session.scalars(
+                select(KnowledgeBase).where(KnowledgeBase.team_id == context.team.id)
+            )
+            if knowledge_base_permission(session, context, kb.id) is not None
+        ]
     stmt = select(Document).where(
         Document.team_id == context.team.id,
         Document.deleted_at.is_(None),
+        Document.knowledge_base_id.in_(permitted),
     )
-    if knowledge_base_id is not None:
-        stmt = stmt.where(Document.knowledge_base_id == knowledge_base_id)
     stmt = stmt.order_by(
         Document.folder_id.asc().nullsfirst(),
         Document.sort_order,
@@ -97,7 +104,9 @@ async def upload_document(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> Response:
-    _get_knowledge_base(session, context.team.id, knowledge_base_id)
+    require_knowledge_base_permission(
+        session, context, knowledge_base_id, "edit"
+    )
     if folder_id is not None:
         folder = session.scalar(
             select(DocumentFolder)
@@ -198,6 +207,7 @@ def download_document(
     document = session.get(Document, document_id)
     if document is None or document.team_id != context.team.id or document.status == "deleted":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    require_knowledge_base(session, context, document.knowledge_base_id)
     if document.status == "uploading":
         raise HTTPException(status_code=409, detail="文件仍在上传")
 
@@ -297,6 +307,7 @@ def get_document_impact(
     document = session.get(Document, document_id)
     if document is None or document.team_id != context.team.id or document.deleted_at is not None:
         raise HTTPException(404, "资料不存在")
+    require_knowledge_base(session, context, document.knowledge_base_id)
     return DocumentImpactOut.model_validate(
         impact_summary(session, document, context.team.id, context.user.id)
     )
@@ -308,7 +319,9 @@ def create_text_document(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> DocumentOut:
-    _get_knowledge_base(session, context.team.id, payload.knowledge_base_id)
+    require_knowledge_base_permission(
+        session, context, payload.knowledge_base_id, "edit"
+    )
     _folder(session, context.team.id, payload.knowledge_base_id, payload.folder_id)
     data = payload.content.encode("utf-8")
     if len(data) > settings.max_upload_bytes:
@@ -335,7 +348,9 @@ def create_web_document(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> DocumentOut:
-    _get_knowledge_base(session, context.team.id, payload.knowledge_base_id)
+    require_knowledge_base_permission(
+        session, context, payload.knowledge_base_id, "edit"
+    )
     _folder(session, context.team.id, payload.knowledge_base_id, payload.folder_id)
     try:
         final_url, data, content_type = fetch_web_page(payload.url, settings.max_upload_bytes)
@@ -369,6 +384,11 @@ def retry_document(
     document = session.get(Document, document_id)
     if document is None or document.team_id != context.team.id:
         raise HTTPException(status_code=404, detail="文档不存在")
+    require_knowledge_base_permission(
+        session, context, document.knowledge_base_id, "edit"
+    )
+    if document.uploaded_by_id != context.user.id:
+        raise HTTPException(403, "只能重试本人上传的资料")
     if document.status == "deleted":
         raise HTTPException(status_code=410, detail="文档已删除")
     if document.status in {"pending", "processing"}:
@@ -388,12 +408,15 @@ def retry_document(
 def delete_document(
     team_id: uuid.UUID,
     document_id: uuid.UUID,
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> None:
     document = session.get(Document, document_id)
     if document is None or document.team_id != context.team.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    require_knowledge_base_permission(
+        session, context, document.knowledge_base_id, "manage"
+    )
 
     # 先提交不可见状态；后续对象删除失败不会让文档复活。
     mark_deleted(session, document)
@@ -416,7 +439,7 @@ class DocumentUpdate(BaseModel):
 def update_document(
     document_id: uuid.UUID,
     payload: DocumentUpdate,
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> DocumentOut:
     document = session.scalar(
@@ -430,6 +453,9 @@ def update_document(
     )
     if document is None:
         raise HTTPException(404, "文档不存在")
+    require_knowledge_base_permission(
+        session, context, document.knowledge_base_id, "manage"
+    )
     if "filename" in payload.model_fields_set:
         if payload.filename is None:
             raise HTTPException(422, "资料名称不能为空")
@@ -485,7 +511,7 @@ async def replace_document(
     document_id: uuid.UUID,
     knowledge_base_id: uuid.UUID = Form(...),
     file: UploadFile = File(...),
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> DocumentReplaceOut:
     old = session.scalar(
@@ -499,6 +525,7 @@ async def replace_document(
     )
     if old is None:
         raise HTTPException(404, "资料不存在")
+    require_knowledge_base_permission(session, context, old.knowledge_base_id, "manage")
     if old.knowledge_base_id != knowledge_base_id:
         raise HTTPException(422, "目标资料不属于当前知识库")
     filename = file.filename or "未命名"

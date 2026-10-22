@@ -170,9 +170,14 @@ def preview_invitation(
         {"token_hash": hash_session_token(payload.token)},
     ).one_or_none()
     if row is None:
-        return InvitationPreviewOut(status="not_found", team_name=None, email_masked=None)
+        return InvitationPreviewOut(
+            status="not_found", team_name=None, email_masked=None, email=None
+        )
     return InvitationPreviewOut(
-        status=row.status, team_name=row.team_name, email_masked=_mask_email(row.email)
+        status=row.status,
+        team_name=row.team_name,
+        email_masked=_mask_email(row.email),
+        email=row.email if row.status == "ok" else None,
     )
 
 

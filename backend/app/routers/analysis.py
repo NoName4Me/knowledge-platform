@@ -16,6 +16,7 @@ from app import analysis
 from app.analysis_contract import AnalysisError
 from app.auth import TeamContext, get_team_context
 from app.db import apply_context, get_session
+from app.knowledge_base_access import require_knowledge_base
 from app.models import (
     AnalysisCitation,
     AnalysisConclusion,
@@ -146,6 +147,7 @@ def get_analysis(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> AnalysisDetailOut:
+    require_knowledge_base(session, context, knowledge_base_id)
     task = session.scalar(
         select(AnalysisTask)
         .where(
@@ -241,6 +243,7 @@ def delete_analysis(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> None:
+    require_knowledge_base(session, context, knowledge_base_id)
     task = _task_or_404(session, context, task_id)
     if task.knowledge_base_id != knowledge_base_id:
         raise _not_found()

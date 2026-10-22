@@ -65,7 +65,8 @@ def session() -> Iterator[Session]:
         conn.execute(
             text(
                 "TRUNCATE users, teams, team_memberships, knowledge_bases, session_tokens, "
-                "documents, document_folders, document_chunks, processing_tasks, team_quotas, "
+                "knowledge_base_access, documents, document_folders, document_chunks, "
+                "processing_tasks, team_quotas, "
                 "upload_requests, conversations, turns, citations, "
                 "analysis_citations, analysis_conclusions, analysis_field_results, "
                 "analysis_documents, analysis_fields, analysis_tasks CASCADE"
@@ -88,7 +89,7 @@ def session() -> Iterator[Session]:
 def client(session: Session) -> Iterator[TestClient]:
     from app import db
     from app.main import app
-    from app.routers import ask, auth, conversations
+    from app.routers import ask, auth, conversations, invitations
 
     db.engine = app_engine
     db.SessionLocal = AppSession
@@ -97,6 +98,7 @@ def client(session: Session) -> Iterator[TestClient]:
         auth.ip_login_limiter,
         ask.ask_limiter,
         conversations.answer_limiter,
+        invitations.redeem_limiter,
     ):
         limiter.reset()
     with TestClient(app) as c:
@@ -135,6 +137,18 @@ def make_user(session: Session, email: str, password: str = "password123", name:
 
     user = User(email=email, display_name=name, password_hash=hash_password(password))
     session.add(user)
+    session.commit()
+    return user
+
+
+def make_platform_admin(
+    session: Session,
+    email: str,
+    password: str = "password123",
+    name: str = "平台管理员",
+):
+    user = make_user(session, email, password=password, name=name)
+    user.is_platform_admin = True
     session.commit()
     return user
 

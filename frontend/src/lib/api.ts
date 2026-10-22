@@ -29,6 +29,7 @@ import type {
   TextDocumentCreate,
   WebDocumentCreate,
 } from "./analysis-types";
+import { randomId } from "./random-id";
 
 export type {
   AnalysisCitationOut,
@@ -76,14 +77,25 @@ export type {
 export type TeamSummary = {
   id: string;
   name: string;
-  role: "admin" | "member";
+  role: "admin" | "member" | "viewer";
+  description?: string | null;
 };
 
 export type MeResponse = {
-  user: { id: string; email: string; display_name: string };
+  user: {
+    id: string;
+    email: string;
+    display_name: string;
+    is_platform_admin: boolean;
+    must_change_password: boolean;
+  };
   teams: TeamSummary[];
   csrf_token: string;
 };
+
+export type AuthSnapshot =
+  | { status: "authenticated"; session: MeResponse }
+  | { status: "password_change_required"; session: MeResponse };
 
 export type CsrfResponse = {
   csrf_token: string;
@@ -93,6 +105,21 @@ export type CsrfResponse = {
 export type KnowledgeBase = {
   id: string;
   name: string;
+  visibility: "team" | "private";
+  team_permission: "inherit" | "view" | "edit" | "manage";
+  permission: "view" | "edit" | "manage";
+  owner_id: string | null;
+};
+
+export type KnowledgeBaseMember = {
+  user_id: string;
+  email: string;
+  display_name: string;
+  team_role: TeamMember["role"];
+  permission: KnowledgeBase["permission"] | null;
+  explicit_permission: KnowledgeBase["permission"] | null;
+  inherited: boolean;
+  source: "owner" | "team_role" | "team_default" | "explicit" | "none";
 };
 
 export type DocumentFolder = {
@@ -107,13 +134,13 @@ export type TeamMember = {
   user_id: string;
   email: string;
   display_name: string;
-  role: "admin" | "member";
+  role: "admin" | "member" | "viewer";
 };
 
 export type TeamInvitation = {
   id: string;
   email: string;
-  role: "admin" | "member";
+  role: "admin" | "member" | "viewer";
   expires_at: string;
   accepted_at: string | null;
   created_at: string;
@@ -123,6 +150,27 @@ export type InvitationPreview = {
   status: "ok" | "used" | "expired" | "not_found";
   team_name: string | null;
   email_masked: string | null;
+  email: string | null;
+};
+
+export type PlatformTeam = {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  administrator_count: number;
+  pending_administrator_invitation_count: number;
+  administrator_invitation_token: string | null;
+};
+
+export type PlatformUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  is_active: boolean;
+  must_change_password: boolean;
+  created_at: string;
 };
 
 export type DocumentStatus = "uploading" | "pending" | "processing" | "ready" | "failed" | "deleted";
@@ -324,18 +372,72 @@ export const api = {
     setCsrfToken(data.csrf_token);
     return data;
   },
+  authSnapshot: async (): Promise<AuthSnapshot> => {
+    const data = await request<MeResponse>("/api/auth/me");
+    setCsrfToken(data.csrf_token);
+    return data.user.must_change_password
+      ? { status: "password_change_required", session: data }
+      : { status: "authenticated", session: data };
+  },
+  updateProfile: (displayName: string) =>
+    writeRequest<MeResponse["user"]>(
+      "/api/auth/profile",
+      jsonInit("PATCH", { display_name: displayName }),
+    ),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    writeRequest<void>(
+      "/api/auth/password",
+      jsonInit("POST", {
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    ),
 
   listKnowledgeBases: (teamId: string) =>
     request<KnowledgeBase[]>(`/api/teams/${teamId}/knowledge-bases`),
-  createKnowledgeBase: (teamId: string, name: string) =>
+  createKnowledgeBase: (
+    teamId: string,
+    name: string,
+    visibility: KnowledgeBase["visibility"] = "team",
+  ) =>
     writeRequest<KnowledgeBase>(
       `/api/teams/${teamId}/knowledge-bases`,
-      jsonInit(FORM_METHOD, { name }),
+      jsonInit(FORM_METHOD, { name, visibility }),
     ),
-  renameKnowledgeBase: (teamId: string, kbId: string, name: string) =>
-    writeRequest<KnowledgeBase>(`/api/teams/${teamId}/knowledge-bases/${kbId}`, jsonInit("PATCH", { name })),
+  updateKnowledgeBase: (
+    teamId: string,
+    kbId: string,
+    patch: {
+      name?: string;
+      visibility?: KnowledgeBase["visibility"];
+      team_permission?: KnowledgeBase["team_permission"];
+    },
+  ) =>
+    writeRequest<KnowledgeBase>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}`,
+      jsonInit("PATCH", patch),
+    ),
+  listKnowledgeBaseAccess: (teamId: string, kbId: string) =>
+    request<KnowledgeBaseMember[]>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/access`,
+    ),
+  replaceKnowledgeBaseAccess: (
+    teamId: string,
+    kbId: string,
+    rows: Array<{
+      user_id: string;
+      permission: KnowledgeBase["permission"];
+    }>,
+  ) =>
+    writeRequest<void>(
+      `/api/teams/${teamId}/knowledge-bases/${kbId}/access`,
+      jsonInit("PUT", rows),
+    ),
   deleteKnowledgeBase: (teamId: string, kbId: string) =>
     writeRequest<void>(`/api/teams/${teamId}/knowledge-bases/${kbId}`, { method: "DELETE" }),
+  updateTeam: (teamId: string, patch: { name?: string; description?: string | null }) =>
+    writeRequest<TeamSummary>(`/api/teams/${teamId}`, jsonInit("PATCH", patch)),
+  getTeam: (teamId: string) => request<TeamSummary>(`/api/teams/${teamId}`),
   listFolders: (teamId: string, kbId: string) =>
     request<DocumentFolder[]>(`/api/teams/${teamId}/knowledge-bases/${kbId}/folders`),
   createFolder: (teamId: string, kbId: string, name: string, parentId: string | null = null) =>
@@ -353,9 +455,21 @@ export const api = {
   listMembers: (teamId: string) => request<TeamMember[]>(`/api/teams/${teamId}/members`),
   removeMember: (teamId: string, userId: string) =>
     writeRequest<void>(`/api/teams/${teamId}/members/${userId}`, { method: "DELETE" }),
+  updateMemberRole: (teamId: string, userId: string, role: TeamMember["role"]) =>
+    writeRequest<TeamMember>(
+      `/api/teams/${teamId}/members/${userId}/role`,
+      jsonInit("PATCH", { role }),
+    ),
+  resetMemberPassword: (teamId: string, userId: string) =>
+    writeRequest<void>(
+      `/api/teams/${teamId}/members/${userId}/reset-password`,
+      { method: "POST" },
+    ),
+  leaveTeam: (teamId: string) =>
+    writeRequest<void>(`/api/teams/${teamId}/leave`, { method: "DELETE" }),
   listInvitations: (teamId: string) =>
     request<TeamInvitation[]>(`/api/teams/${teamId}/invitations`),
-  createInvitation: (teamId: string, email: string, role: "admin" | "member") =>
+  createInvitation: (teamId: string, email: string, role: TeamMember["role"]) =>
     writeRequest<{ invitation: TeamInvitation; token: string }>(
       `/api/teams/${teamId}/invitations`,
       jsonInit(FORM_METHOD, { email, role }),
@@ -379,6 +493,41 @@ export const api = {
     }),
   acceptInvitation: (token: string) =>
     writeRequest<MeResponse>("/api/invitations/accept", jsonInit(FORM_METHOD, { token })),
+  listPlatformTeams: () => request<PlatformTeam[]>("/api/platform/teams"),
+  listPlatformUsers: () => request<PlatformUser[]>("/api/platform/users"),
+  createPlatformTeam: (
+    name: string,
+    description: string,
+    administratorEmail: string,
+  ) =>
+    writeRequest<PlatformTeam>(
+      "/api/platform/teams",
+      jsonInit(FORM_METHOD, {
+        name,
+        description: description || null,
+        administrator_email: administratorEmail,
+      }),
+    ),
+  assignPlatformTeamAdministrator: (teamId: string, administratorEmail: string) =>
+    writeRequest<PlatformTeam>(
+      `/api/platform/teams/${teamId}/administrator`,
+      jsonInit(FORM_METHOD, { administrator_email: administratorEmail }),
+    ),
+  updatePlatformTeamStatus: (teamId: string, active: boolean) =>
+    writeRequest<PlatformTeam>(
+      `/api/platform/teams/${teamId}/status`,
+      jsonInit("PATCH", { is_active: active }),
+    ),
+  updatePlatformUserStatus: (userId: string, active: boolean) =>
+    writeRequest<PlatformUser>(
+      `/api/platform/users/${userId}/status`,
+      jsonInit("PATCH", { is_active: active }),
+    ),
+  resetUserPassword: (userId: string) =>
+    writeRequest<PlatformUser>(
+      `/api/platform/users/${userId}/reset-password`,
+      { method: FORM_METHOD },
+    ),
 
   listDocuments: (teamId: string, knowledgeBaseId: string) =>
     request<DocumentItem[]>(
@@ -391,7 +540,7 @@ export const api = {
     if (folderId) form.append("folder_id", folderId);
     return writeRequest<DocumentItem>(`/api/teams/${teamId}/documents`, {
       method: FORM_METHOD,
-      headers: { "Idempotency-Key": crypto.randomUUID() },
+      headers: { "Idempotency-Key": randomId() },
       body: form,
     });
   },
@@ -423,7 +572,7 @@ export const api = {
       `/api/teams/${teamId}/documents/${documentId}/replace`,
       {
         method: FORM_METHOD,
-        headers: { "Idempotency-Key": crypto.randomUUID() },
+        headers: { "Idempotency-Key": randomId() },
         body: form,
       },
     );

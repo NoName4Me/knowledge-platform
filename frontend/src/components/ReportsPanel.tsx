@@ -12,6 +12,7 @@ import {
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
 import { documentLabel } from "../lib/document-label";
+import { randomId } from "../lib/random-id";
 
 type Props = {
   teamId: string;
@@ -182,7 +183,7 @@ export function ReportsPanel({
     setSections((items) => [
       ...items,
       {
-        key: crypto.randomUUID(),
+        key: randomId(),
         id: "",
         ordinal: items.length,
         heading: "新章节",

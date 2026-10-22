@@ -4,6 +4,8 @@ import logging
 import time
 import uuid
 
+from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app import analysis, automation, db
@@ -47,8 +49,9 @@ def process_task(
     task: ProcessingTask,
     team_id: uuid.UUID,
     lease_token: uuid.UUID | None = None,
+    owner_id: uuid.UUID | None = None,
 ) -> None:
-    apply_context(session, team_id=team_id)
+    apply_context(session, team_id=team_id, user_id=owner_id)
     if lease_token is not None and task.lease_token != lease_token:
         raise LeaseLost
     document = session.get(Document, task.document_id)
@@ -62,6 +65,22 @@ def process_task(
         task.lease_expires_at = None
         session.flush()
         return
+    if document.uploaded_by_id is not None:
+        allowed = session.scalar(
+            text("select app_kb_permission(:knowledge_base_id, :user_id)"),
+            {
+                "knowledge_base_id": document.knowledge_base_id,
+                "user_id": document.uploaded_by_id,
+            },
+        )
+        if not allowed:
+            task.status = "canceled"
+            task.lease_token = None
+            task.lease_expires_at = None
+            document.failure_reason = "上传者已停用或不再拥有该知识库权限"
+            session.flush()
+            session.commit()
+            return
 
     document.status = "processing"
     session.flush()
@@ -127,6 +146,12 @@ def process_task(
 
 def _reclaim_analysis() -> None:
     with db.SessionLocal() as session:
+        revoked = session.execute(
+            text("select app_revoke_inaccessible_knowledge_work()")
+        ).scalar_one()
+        session.commit()
+        if revoked:
+            logger.warning("收敛了 %d 项已失去知识库权限的后台工作", revoked)
         reclaimed = reclaim_expired_documents(session)
         for execution_id, task_id, team_id, owner_id, exhausted in reclaimed:
             logger.warning("回收了过期的分析执行 execution=%s task=%s", execution_id, task_id)
@@ -302,10 +327,10 @@ def _run_parsing_once() -> bool:
     with db.SessionLocal() as session:
         reclaimed = reclaim_expired_tasks(session)
         session.commit()
-        for task_id, team_id, exhausted in reclaimed:
+        for task_id, team_id, owner_id, exhausted in reclaimed:
             with db.SessionLocal() as recovery:
                 if exhausted:
-                    mark_exhausted_failed(recovery, team_id, task_id)
+                    mark_exhausted_failed(recovery, team_id, task_id, owner_id)
                 recovery.commit()
         if reclaimed:
             logger.warning("回收了 %d 个过期任务", len(reclaimed))
@@ -315,10 +340,10 @@ def _run_parsing_once() -> bool:
         if claimed is None:
             session.rollback()
             return False
-        task_id, team_id, lease_token = claimed
+        task_id, team_id, owner_id, lease_token = claimed
 
     with db.SessionLocal() as session:
-        apply_context(session, team_id=team_id)
+        apply_context(session, team_id=team_id, user_id=owner_id)
         task = session.get(ProcessingTask, task_id)
         if task is None:
             return True
@@ -326,7 +351,13 @@ def _run_parsing_once() -> bool:
             logger.warning("任务 %s 的租约令牌与领取结果不一致，放弃执行", task_id)
             return True
         try:
-            process_task(session, task, team_id, lease_token)
+            process_task(
+                session,
+                task,
+                team_id,
+                lease_token,
+                owner_id=owner_id,
+            )
         except LeaseLost:
             session.rollback()
             logger.warning("任务 %s 租约已失效，放弃发布", task_id)
@@ -334,7 +365,7 @@ def _run_parsing_once() -> bool:
             session.rollback()
             logger.exception("任务 %s 处理异常", task_id, exc_info=exc)
             with db.SessionLocal() as recovery:
-                apply_context(recovery, team_id=team_id)
+                apply_context(recovery, team_id=team_id, user_id=owner_id)
                 task = recovery.get(ProcessingTask, task_id)
                 document = recovery.get(Document, task.document_id) if task else None
                 if task and document:
@@ -365,6 +396,21 @@ def run_once() -> bool:
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     logger.info("文档处理 worker 启动")
+    try:
+        with db.SessionLocal() as session:
+            session.execute(
+                text("select app_revoke_inaccessible_knowledge_work()")
+            ).scalar_one()
+            session.execute(
+                text("select * from app_reconcile_upload_candidates(now(), 1)")
+            ).all()
+            session.rollback()
+    except ProgrammingError as exc:
+        logger.error(
+            "数据库结构不是最新版本，请停止 API 与 worker，"
+            "在 backend 目录执行 `.venv/bin/python -m alembic upgrade head` 后重启"
+        )
+        raise SystemExit(2) from exc
     last_reconciliation = 0.0
     while True:
         if time.monotonic() - last_reconciliation >= RECONCILE_INTERVAL_SECONDS:

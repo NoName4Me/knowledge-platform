@@ -40,12 +40,20 @@ def test_cli_reads_password_from_environment(monkeypatch):
 
     captured: dict[str, str] = {}
 
-    def fake_create_admin(email: str, name: str, password: str, team_name: str) -> None:
+    def fake_create_admin(
+        email: str,
+        name: str,
+        password: str,
+        team_name: str,
+        *,
+        platform_admin: bool = False,
+    ) -> None:
         captured.update(
             email=email,
             name=name,
             password=password,
             team_name=team_name,
+            platform_admin=str(platform_admin),
         )
 
     monkeypatch.setattr(cli, "create_admin", fake_create_admin)

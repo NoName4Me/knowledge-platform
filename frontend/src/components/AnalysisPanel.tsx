@@ -20,6 +20,7 @@ import {
   type SavedRequirementOut,
 } from "../lib/api";
 import { useEvidence, type EvidenceSource } from "../lib/evidence-context";
+import { randomId } from "../lib/random-id";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
 import { SelectMenu } from "./Popover";
@@ -81,7 +82,7 @@ const isActive = (task: AnalysisTaskOut) =>
   task.status === "queued" || task.status === "running";
 
 const newDraftField = (): DraftField => ({
-  key: crypto.randomUUID(),
+  key: randomId(),
   name: "",
   description: "",
   value_type: "text",
@@ -575,7 +576,7 @@ export function AnalysisPanel({
     teamId: string;
     knowledgeBaseId: string;
   } | null>(null);
-  const idempotencyKey = useRef(crypto.randomUUID());
+  const idempotencyKey = useRef(randomId());
   const historyRequest = useRef(0);
   const detailRequest = useRef(0);
 
@@ -707,7 +708,7 @@ export function AnalysisPanel({
     setTitle(detail.task.title);
     setFields(
       detail.fields.map((field) => ({
-        key: crypto.randomUUID(),
+        key: randomId(),
         name: field.name,
         description: field.description,
         value_type: field.value_type,
@@ -715,7 +716,7 @@ export function AnalysisPanel({
     );
     setSelectedIds(detail.documents.map((document) => document.document_id));
     setSubmitError(null);
-    idempotencyKey.current = crypto.randomUUID();
+    idempotencyKey.current = randomId();
     document.getElementById("analysis-create-heading")?.scrollIntoView({
       behavior: "smooth",
       block: "start",
@@ -747,7 +748,7 @@ export function AnalysisPanel({
     setFields(
       fieldSuggestion.fields.map((field) => ({
         ...field,
-        key: crypto.randomUUID(),
+        key: randomId(),
       })),
     );
     setFieldSuggestion(null);
@@ -769,7 +770,7 @@ export function AnalysisPanel({
         !VALUE_TYPES.some((type) => type.value === valueType)
       ) return [];
       return [{
-        key: crypto.randomUUID(),
+        key: randomId(),
         name: record.name,
         description: record.description,
         value_type: valueType as AnalysisFieldInput["value_type"],
@@ -872,7 +873,7 @@ export function AnalysisPanel({
         },
         idempotencyKey.current,
       );
-      idempotencyKey.current = crypto.randomUUID();
+      idempotencyKey.current = randomId();
       setSourceTask(null);
       setFields([newDraftField()]);
       setTitle("");

@@ -18,6 +18,7 @@ import httpx
 from docx import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
+from fastapi import HTTPException
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy import func, select, update
@@ -26,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.analysis import source_fingerprint
 from app.auth import TeamContext
 from app.config import get_settings
+from app.knowledge_base_access import require_knowledge_base
 from app.models import (
     AnalysisCitation,
     AnalysisConclusion,
@@ -87,10 +89,13 @@ class ProductConflict(KnowledgeProductError):
 
 
 def _knowledge_base(session: Session, context: TeamContext, kb_id: uuid.UUID) -> KnowledgeBase:
-    kb = session.get(KnowledgeBase, kb_id)
-    if kb is None or kb.team_id != context.team.id:
-        raise ProductNotFound("知识库不存在")
-    return kb
+    try:
+        knowledge_base, _permission = require_knowledge_base(session, context, kb_id)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            raise ProductNotFound("知识库不存在或无权访问") from exc
+        raise ProductNotFound("知识库不存在") from exc
+    return knowledge_base
 
 
 def _snapshot(citation: EvidenceSnapshotInput | dict[str, Any]) -> dict[str, Any]:

@@ -16,6 +16,7 @@ import {
   type DocumentItem,
   type SavedRequirementOut,
 } from "../lib/api";
+import { randomId } from "../lib/random-id";
 import { Icon } from "./Icon";
 import { SelectMenu } from "./Popover";
 
@@ -87,7 +88,7 @@ const canContinue = (item: AutomationOut) =>
   ].includes(item.error_code ?? "");
 
 const newDraftField = (): DraftField => ({
-  key: crypto.randomUUID(),
+  key: randomId(),
   name: "",
   description: "",
   value_type: "text",
@@ -218,7 +219,7 @@ export function AutomationPanel({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
-  const idempotencyKey = useRef(crypto.randomUUID());
+  const idempotencyKey = useRef(randomId());
   const listRequest = useRef(0);
   const detailRequest = useRef(0);
 
@@ -352,7 +353,7 @@ export function AutomationPanel({
     if (!fieldSuggestion) return;
     setFields(fieldSuggestion.fields.map((field) => ({
       ...field,
-      key: crypto.randomUUID(),
+      key: randomId(),
     })));
     setFieldSuggestion(null);
   }
@@ -372,7 +373,7 @@ export function AutomationPanel({
         !VALUE_TYPES.some((type) => type.value === record.value_type)
       ) return [];
       return [{
-        key: crypto.randomUUID(),
+        key: randomId(),
         name: record.name,
         description: record.description,
         value_type: record.value_type as AnalysisFieldInput["value_type"],
@@ -440,7 +441,7 @@ export function AutomationPanel({
         },
         idempotencyKey.current,
       );
-      idempotencyKey.current = crypto.randomUUID();
+    idempotencyKey.current = randomId();
       setItems((current) => [created, ...current.filter((item) => item.id !== created.id)]);
       setSelectedId(created.id);
       setKind("extraction");

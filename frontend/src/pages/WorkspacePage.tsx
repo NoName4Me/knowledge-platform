@@ -5,13 +5,15 @@ import { useToast } from "../lib/toast-context";
 import { knowledgeBasePath, workspaceRoute } from "../lib/workspace-route";
 import { readPreference, writePreference } from "../lib/workspace-preferences";
 import { MemberDialog } from "../components/MemberDialog";
-import { NameDialog } from "../components/NameDialog";
 import { ProfileMenu } from "../components/ProfileMenu";
+import { TeamSettingsDialog } from "../components/TeamSettingsDialog";
+import { KnowledgeBaseSettingsDialog } from "../components/KnowledgeBaseSettingsDialog";
 import { Modal } from "../components/Modal";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Brand, Icon } from "../components/Icon";
 import { PopoverMenu, SelectMenu } from "../components/Popover";
 import { KnowledgeWorkspace } from "./KnowledgeWorkspace";
+import { teamRoleLabel } from "../lib/team-role";
 
 export type Library = KnowledgeBase & { team: TeamSummary };
 const message = (error: unknown, fallback: string) => error instanceof ApiError ? error.message : fallback;
@@ -21,6 +23,7 @@ function CreateLibrary({ teams, initialTeam, onClose, onCreated }: {
 }) {
   const [teamId, setTeamId] = useState(teams.some((team) => team.id === initialTeam) ? initialTeam : teams[0]?.id ?? "");
   const [name, setName] = useState("");
+  const [visibility, setVisibility] = useState<KnowledgeBase["visibility"]>("team");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   async function create(event: FormEvent) {
@@ -28,24 +31,26 @@ function CreateLibrary({ teams, initialTeam, onClose, onCreated }: {
     const team = teams.find((item) => item.id === teamId);
     if (!team || !name.trim() || saving) return;
     setSaving(true); setError("");
-    try { const kb = await api.createKnowledgeBase(teamId, name.trim()); onCreated({ ...kb, team }); }
+    try { const kb = await api.createKnowledgeBase(teamId, name.trim(), visibility); onCreated({ ...kb, team }); }
     catch (err) { setError(message(err, "创建知识库失败，请重试")); }
     finally { setSaving(false); }
   }
   return <Modal title="新建知识库" busy={saving} onClose={onClose}><form onSubmit={(event) => void create(event)}>
     <div className="field"><span>所属团队</span><SelectMenu label="所属团队" value={teamId} onChange={setTeamId} disabled={saving} options={teams.map((team) => ({ id: team.id, label: team.name }))} /></div>
     <label className="field"><span>知识库名称</span><input autoFocus required maxLength={200} placeholder="例如：产品资料、团队制度" value={name} onChange={(event) => setName(event.target.value)} disabled={saving} /></label>
+    <div className="field"><span>可见范围</span><SelectMenu label="可见范围" value={visibility} onChange={(value) => setVisibility(value as KnowledgeBase["visibility"])} disabled={saving} options={[{ id: "team", label: "团队可见" }, { id: "private", label: "私人（仅创建者和获授权成员）" }]} /></div>
+    <p className="maintenance-hint">{visibility === "team" ? "团队成员按角色获得默认权限，可再为个人提高权限。" : "团队管理员不会自动看到私人知识库；创建者可单独授权成员。"}</p>
     {error && <p role="alert" className="error-text">{error}</p>}
     <div className="maintenance-actions"><button type="button" className="btn btn--ghost" disabled={saving} onClick={onClose}>取消</button><button className="btn" disabled={saving || !name.trim() || !teamId}>{saving ? "创建中…" : "创建并进入"}</button></div>
   </form></Modal>;
 }
 
-function LibraryMenu({ library, onRename, onDelete, busy }: {
-  library: Library; onRename: () => void; onDelete: () => void; busy: boolean;
+function LibraryMenu({ library, onSettings, onDelete, busy }: {
+  library: Library; onSettings: () => void; onDelete: () => void; busy: boolean;
 }) {
   return <PopoverMenu label={`管理知识库 ${library.name}`} className="library-menu" trigger={<Icon name="more" size={20} />}>
     {(close) => <>
-      <button type="button" role="menuitem" disabled={busy} onClick={() => { close(); onRename(); }}>重命名知识库</button>
+      <button type="button" role="menuitem" disabled={busy} onClick={() => { close(); onSettings(); }}>知识库设置与成员权限</button>
       <button type="button" role="menuitem" className="is-danger" disabled={busy} onClick={() => { close(); onDelete(); }}>删除知识库</button>
     </>}
   </PopoverMenu>;
@@ -60,8 +65,9 @@ export function WorkspacePage() {
   const [teamErrors, setTeamErrors] = useState<Record<string, string>>({});
   const [revision, setRevision] = useState(0);
   const [creating, setCreating] = useState(false);
-  const [renaming, setRenaming] = useState<Library | null>(null);
+  const [configuring, setConfiguring] = useState<Library | null>(null);
   const [managingTeam, setManagingTeam] = useState<TeamSummary | null>(null);
+  const [settingsTeam, setSettingsTeam] = useState<TeamSummary | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<Library | null>(null);
   const [teamFilter, setTeamFilter] = useState("all");
@@ -83,7 +89,6 @@ export function WorkspacePage() {
   }, [session, revision]);
   if (!session) return null;
   const active = route.kind === "knowledge" ? libraries.find((kb) => kb.id === route.knowledgeBaseId && kb.team.id === route.teamId) : undefined;
-  const adminTeams = session.teams.filter((team) => team.role === "admin");
   const visible = libraries.filter((kb) => (teamFilter === "all" || kb.team.id === teamFilter) && `${kb.name} ${kb.team.name}`.toLowerCase().includes(query.toLowerCase()));
   const lastTeam = readPreference(`${session.user.id}:team`);
   function enter(kb: Library) {
@@ -106,7 +111,7 @@ export function WorkspacePage() {
     }
     finally { setDeleting(null); }
   }
-  const management = (kb: Library) => kb.team.role === "admin" ? <LibraryMenu library={kb} busy={deleting !== null} onRename={() => setRenaming(kb)} onDelete={() => setConfirming(kb)} /> : null;
+  const management = (kb: Library) => kb.permission === "manage" ? <LibraryMenu library={kb} busy={deleting !== null} onSettings={() => setConfiguring(kb)} onDelete={() => setConfirming(kb)} /> : null;
   return <div className="workbench">
     <a className="skip-link" href="#workspace-main">跳到工作区</a>
     <header className="workbench-header">
@@ -119,21 +124,21 @@ export function WorkspacePage() {
           placeholder={loading ? "正在加载知识库…" : "知识库不可访问"}
           options={libraries.map((kb) => ({ id: kb.id, label: kb.name, group: kb.team.name }))}
           onChange={(id) => { const kb = libraries.find((item) => item.id === id); if (kb) enter(kb); }}
-        /><small>{active?.team.name ?? ""}</small></div>{active && management(active)}</div>}
+        /><small>{active?.team.name ?? ""} · {active?.visibility === "private" ? "私人" : "团队"} · {active?.permission === "manage" ? "可管理" : active?.permission === "edit" ? "可编辑" : "只读"}</small></div>{active && management(active)}</div>}
       <ProfileMenu />
     </header>
     {route.kind === "home" ? <main id="workspace-main" className="home-page" tabIndex={-1}>
-      <div className="home-intro"><div><h1>我的工作台</h1><p>从一份资料开始，把问题带进知识库。</p></div>{adminTeams.length > 0 && <button className="btn" type="button" onClick={() => setCreating(true)}><Icon name="plus" size={17} />新建知识库</button>}</div>
+      <div className="home-intro"><div><h1>我的工作台</h1><p>从一份资料开始，把问题带进知识库。</p></div>{session.teams.length > 0 && <button className="btn" type="button" onClick={() => setCreating(true)}><Icon name="plus" size={17} />新建知识库</button>}</div>
       <div className="home-layout"><section className="home-libraries" aria-labelledby="home-libraries-title">
         <div className="home-section-heading"><h2 id="home-libraries-title">知识库 <span>{libraries.length}</span></h2><div className="home-filters"><SelectMenu className="home-filter-select" label="按团队筛选" value={teamFilter} onChange={setTeamFilter} options={[{ id: "all", label: "全部团队" }, ...session.teams.map((team) => ({ id: team.id, label: team.name }))]} /><label className="sr-only" htmlFor="library-search">搜索知识库</label><input id="library-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索知识库" /></div></div>
         {Object.entries(teamErrors).map(([id, value]) => <p className="error-text home-load-error" key={id} role="alert">{session.teams.find((team) => team.id === id)?.name}：{value}<button type="button" className="btn btn--ghost" onClick={reload}>重试</button></p>)}
-        {loading ? <p className="home-empty" role="status">正在加载知识库…</p> : visible.length ? <div className="library-grid">{visible.map((kb) => <article className="library-card" key={kb.id}><div className="library-card__top"><span className="library-emblem"><Icon name="book" size={24} /></span>{management(kb)}</div><a className="library-card__link" href={knowledgeBasePath(kb.team.id, kb.id)}><h3>{kb.name}</h3><p>{kb.team.name}</p><span>进入知识库 <Icon name="external" size={13} /></span></a></article>)}</div> : <div className="home-empty"><Icon name="book" size={30} /><h3>{query ? "没有匹配的知识库" : "还没有知识库"}</h3><p>{query ? "换个名称或团队试试。" : adminTeams.length ? "创建知识库，上传资料后即可开始问答与分析。" : "管理员创建知识库后，会显示在这里。"}</p></div>}
+        {loading ? <p className="home-empty" role="status">正在加载知识库…</p> : visible.length ? <div className="library-grid">{visible.map((kb) => <article className="library-card" key={kb.id}><div className="library-card__top"><span className="library-emblem"><Icon name={kb.visibility === "private" ? "lock" : "book"} size={24} /></span>{management(kb)}</div><a className="library-card__link" href={knowledgeBasePath(kb.team.id, kb.id)}><h3>{kb.name}</h3><p>{kb.team.name}</p><div className="library-card__meta"><span>{kb.visibility === "private" ? "私人知识库" : "团队知识库"}</span><span>{kb.permission === "manage" ? "可管理" : kb.permission === "edit" ? "可编辑" : "只读"}</span></div><span>进入知识库 <Icon name="external" size={13} /></span></a></article>)}</div> : <div className="home-empty"><Icon name="book" size={30} /><h3>{query ? "没有匹配的知识库" : "还没有知识库"}</h3><p>{query ? "换个名称或团队试试。" : session.teams.length ? "创建团队可见或私人知识库，再按需授权成员。" : "加入团队后即可创建或访问知识库。"}</p></div>}
       </section><section className="home-teams" aria-labelledby="home-teams-title"><div className="home-section-heading"><h2 id="home-teams-title">团队 <span>{session.teams.length}</span></h2></div>
-        <ul>{session.teams.map((team) => <li key={team.id}><span className="team-emblem">{team.name.slice(0, 1)}</span><div><h3>{team.name}</h3><p>{team.role === "admin" ? "管理员" : "团队成员"}</p><div className="home-team-actions"><button type="button" onClick={() => setTeamFilter(team.id)}>查看知识库</button>{team.role === "admin" && <button type="button" onClick={() => setManagingTeam(team)}>管理成员</button>}</div></div></li>)}</ul>{session.teams.length === 0 && <p className="home-empty">尚未加入团队，请联系管理员获取邀请。</p>}
+        <ul>{session.teams.map((team) => <li key={team.id}><span className="team-emblem">{team.name.slice(0, 1)}</span><div><h3>{team.name}</h3><p>{teamRoleLabel(team.role)}</p><div className="home-team-actions"><button type="button" onClick={() => setTeamFilter(team.id)}>查看知识库</button><button type="button" onClick={() => setSettingsTeam(team)}>团队设置</button></div></div></li>)}</ul>{session.teams.length === 0 && <p className="home-empty">尚未加入团队，请联系管理员获取邀请。</p>}
       </section></div>
     </main> : loading ? <main className="workbench-loading" id="workspace-main" role="status">正在进入知识库…</main> : active ? <KnowledgeWorkspace key={`${active.team.id}:${active.id}`} library={active} /> : <main className="workbench-loading" id="workspace-main"><Icon name="book" size={32} /><h1>无法进入这个知识库</h1><p>{route.kind === "knowledge" && teamErrors[route.teamId] ? teamErrors[route.teamId] : "知识库不存在、已删除，或你已不属于对应团队。"}</p><div><a className="btn btn--ghost" href="/">返回首页</a><button className="btn" type="button" onClick={reload}>重新加载</button></div></main>}
-    {creating && <CreateLibrary teams={adminTeams} initialTeam={teamFilter !== "all" ? teamFilter : lastTeam} onClose={() => setCreating(false)} onCreated={enter} />}
-    {renaming && <NameDialog title="重命名知识库" label="知识库名称" initial={renaming.name} onClose={() => setRenaming(null)} onSave={async (name) => { const updated = await api.renameKnowledgeBase(renaming.team.id, renaming.id, name); setLibraries((items) => items.map((kb) => kb.id === updated.id ? { ...kb, ...updated } : kb)); }} />}
+    {creating && <CreateLibrary teams={session.teams} initialTeam={teamFilter !== "all" ? teamFilter : lastTeam} onClose={() => setCreating(false)} onCreated={enter} />}
+    {configuring && <KnowledgeBaseSettingsDialog library={configuring} onClose={() => setConfiguring(null)} onSaved={(updated) => { setLibraries((items) => items.map((kb) => kb.id === updated.id ? { ...kb, ...updated } : kb)); }} onSuccess={(value) => toast.notify(value, { kind: "success" })} />}
     {confirming && <ConfirmDialog
       title={`删除知识库“${confirming.name}”？`}
       confirmLabel="永久删除"
@@ -151,6 +156,16 @@ export function WorkspacePage() {
         <p>团队存储额度会同步释放；其他知识库不受影响。</p>
       </>}
     />}
-    {managingTeam && <MemberDialog teamId={managingTeam.id} onClose={() => setManagingTeam(null)} onError={(value) => toast.notify(value, { kind: "error" })} />}
+    {managingTeam && <MemberDialog teamId={managingTeam.id} onClose={() => setManagingTeam(null)} onError={(value) => toast.notify(value, { kind: "error" })} onSuccess={(value) => toast.notify(value, { kind: "success" })} />}
+    {settingsTeam && <TeamSettingsDialog
+      team={settingsTeam}
+      onClose={() => setSettingsTeam(null)}
+      onManageMembers={() => {
+        setManagingTeam(settingsTeam);
+        setSettingsTeam(null);
+      }}
+      onError={(value) => toast.notify(value, { kind: "error" })}
+      onSuccess={(value) => toast.notify(value, { kind: "success" })}
+    />}
   </div>;
 }

@@ -36,6 +36,7 @@ from app.analysis_contract import (
 from app.auth import TeamContext
 from app.config import get_settings
 from app.db import apply_context
+from app.knowledge_base_access import require_knowledge_base
 from app.models import (
     AnalysisCitation,
     AnalysisDocument,
@@ -45,8 +46,6 @@ from app.models import (
     AnalysisTask,
     Document,
     DocumentChunk,
-    KnowledgeBase,
-    TeamMembership,
 )
 
 settings = get_settings()
@@ -145,13 +144,6 @@ class CreatedTask:
     created: bool
 
 
-def _knowledge_base(session: Session, team_id: uuid.UUID, kb_id: uuid.UUID) -> KnowledgeBase:
-    kb = session.get(KnowledgeBase, kb_id)
-    if kb is None or kb.team_id != team_id:
-        raise AnalysisSourceUnavailable("知识库不存在")
-    return kb
-
-
 def _load_sources(
     session: Session, team_id: uuid.UUID, kb_id: uuid.UUID, document_ids: list[uuid.UUID]
 ) -> list[Document]:
@@ -205,7 +197,7 @@ def create_task(
 ) -> CreatedTask:
     """创建分析任务；固定输入、来源快照与执行记录在同一事务完成。"""
     bounds = limits()
-    _knowledge_base(session, context.team.id, knowledge_base_id)
+    require_knowledge_base(session, context, knowledge_base_id)
 
     from app.schemas import AnalysisCreateRequest, AnalysisFieldInput
 
@@ -351,7 +343,7 @@ def list_tasks(
     cursor: str | None,
     limit: int,
 ) -> tuple[list[AnalysisTask], str | None]:
-    _knowledge_base(session, context.team.id, knowledge_base_id)
+    require_knowledge_base(session, context, knowledge_base_id)
     stmt = select(AnalysisTask).where(
         AnalysisTask.team_id == context.team.id,
         AnalysisTask.knowledge_base_id == knowledge_base_id,
@@ -417,14 +409,36 @@ def mark_permission_revoked(session: Session, task: AnalysisTask) -> None:
 
 
 def is_member(session: Session, team_id: uuid.UUID, user_id: uuid.UUID) -> bool:
-    return (
-        session.scalars(
-            select(TeamMembership.id).where(
-                TeamMembership.team_id == team_id,
-                TeamMembership.user_id == user_id,
-            )
-        ).one_or_none()
-        is not None
+    return bool(
+        session.execute(
+            text("select app_can_access_team(:team_id, :user_id)"),
+            {"team_id": team_id, "user_id": user_id},
+        ).scalar_one()
+    )
+
+
+def can_access_knowledge_base(
+    session: Session,
+    *,
+    team_id: uuid.UUID,
+    user_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+) -> bool:
+    """Worker-side check using only the current user and base identity."""
+    value = session.execute(
+        text("select app_kb_permission(:knowledge_base_id, :user_id)"),
+        {
+            "knowledge_base_id": knowledge_base_id,
+            "user_id": user_id,
+        },
+    ).scalar_one_or_none()
+    if value is None:
+        return False
+    return bool(
+        session.execute(
+            text("select app_can_access_team(:team_id, :user_id)"),
+            {"team_id": team_id, "user_id": user_id},
+        ).scalar_one()
     )
 
 

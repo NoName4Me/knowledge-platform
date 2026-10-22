@@ -16,6 +16,7 @@ from app.routers import (
     folders,
     invitations,
     knowledge_products,
+    management,
     teams,
 )
 
@@ -43,6 +44,7 @@ app.include_router(analysis.router)
 app.include_router(automations.router)
 app.include_router(folders.router)
 app.include_router(knowledge_products.router)
+app.include_router(management.router)
 
 
 @app.get("/api/health")

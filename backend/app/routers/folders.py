@@ -9,9 +9,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import TeamContext, get_team_context, require_admin
+from app.auth import TeamContext, get_team_context
 from app.db import apply_context, get_session
-from app.models import Document, DocumentFolder, KnowledgeBase
+from app.knowledge_base_access import require_knowledge_base, require_knowledge_base_permission
+from app.models import Document, DocumentFolder
 from app.storage import delete_objects_best_effort
 from app.upload_service import mark_deleted, release_quota_once
 
@@ -56,9 +57,7 @@ class TreeReorder(BaseModel):
 
 
 def require_kb(session: Session, context: TeamContext, kb_id: uuid.UUID) -> None:
-    kb = session.get(KnowledgeBase, kb_id)
-    if kb is None or kb.team_id != context.team.id:
-        raise HTTPException(404, "知识库不存在")
+    require_knowledge_base(session, context, kb_id)
 
 
 def get_folder(
@@ -129,10 +128,10 @@ def list_folders(
 def create_folder(
     knowledge_base_id: uuid.UUID,
     payload: FolderCreate,
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> FolderOut:
-    require_kb(session, context, knowledge_base_id)
+    require_knowledge_base_permission(session, context, knowledge_base_id, "manage")
     require_parent(session, context, knowledge_base_id, payload.parent_id)
     next_order = session.scalar(
         select(func.coalesce(func.max(DocumentFolder.sort_order), -1) + 1).where(
@@ -270,10 +269,11 @@ def reorder_scope(
 def reorder_tree(
     knowledge_base_id: uuid.UUID,
     payload: TreeReorder,
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> list[FolderOut]:
     """Persist one sibling's complete order; mixed folders and documents share a list."""
+    require_knowledge_base_permission(session, context, knowledge_base_id, "manage")
     return reorder_scope(session, context, knowledge_base_id, payload)
 
 
@@ -282,9 +282,10 @@ def rename_folder(
     knowledge_base_id: uuid.UUID,
     folder_id: uuid.UUID,
     payload: FolderName,
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> FolderOut:
+    require_knowledge_base_permission(session, context, knowledge_base_id, "manage")
     folder = get_folder(session, context, knowledge_base_id, folder_id)
     folder.name = payload.name
     commit_name(session)
@@ -296,9 +297,10 @@ def move_folder(
     knowledge_base_id: uuid.UUID,
     folder_id: uuid.UUID,
     payload: FolderMove,
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> FolderOut:
+    require_knowledge_base_permission(session, context, knowledge_base_id, "manage")
     folder = get_folder(session, context, knowledge_base_id, folder_id)
     require_parent(session, context, knowledge_base_id, payload.parent_id)
     if payload.parent_id == folder.id:
@@ -336,9 +338,10 @@ def move_folder(
 def delete_folder(
     knowledge_base_id: uuid.UUID,
     folder_id: uuid.UUID,
-    context: TeamContext = Depends(require_admin),
+    context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> None:
+    require_knowledge_base_permission(session, context, knowledge_base_id, "manage")
     folder = get_folder(session, context, knowledge_base_id, folder_id)
     folder_ids = [folder.id]
     pending = [folder.id]
