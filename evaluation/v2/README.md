@@ -8,7 +8,7 @@
 ```
 corpus/             四种支持格式的样例文档（txt / md / docx / pdf）
 dataset/cases.json  固定样例、字段定义与预期结果
-build_corpus.py     重新生成 corpus/（需要 dev 依赖 reportlab）
+build_corpus.py     重新生成 corpus/（需要后端依赖 reportlab）
 validate_cases.py   静态校验样例自洽性
 evaluate.py         通过运行中的部署执行样例并记录自动检查结果
 results/            历次运行结果（每次写入独立子目录）
@@ -29,12 +29,12 @@ backend/.venv/bin/python evaluation/v2/validate_cases.py
 
 ## 执行评测
 
-先登录账号、确定目标团队，再在运行中的部署上执行：
+先准备独立评测账号和目标团队，确认本地 API、worker、Vite 与真实模型配置，再执行（显式传入 5173 以覆盖脚本的历史默认端口 8080）：
 
 ```bash
 KP_EVAL_EMAIL='...' KP_EVAL_PASSWORD='...' KP_EVAL_TEAM_ID='...' \
   backend/.venv/bin/python evaluation/v2/evaluate.py run \
-  --base-url http://127.0.0.1:8080 \
+  --base-url http://127.0.0.1:5173 \
   --results evaluation/v2/results/current/results.json
 ```
 
@@ -80,11 +80,11 @@ KP_EVAL_EMAIL='...' KP_EVAL_PASSWORD='...' KP_EVAL_TEAM_ID='...' \
 - `anchor` / `anchors` 是期望依据的原文片段；`anchor_absent` 是确认不存在的文本。
 - `note` 记录该预期的判定理由与常见错误。
 
-这些预期由人工按公开原文标注，T08 才扩充到量化评测规模；本目录不产出质量百分比。
+这些预期由人工按公开原文标注。正式评测需按 [V2 范围](../../V2-SCOPE.md) 确认规模并扩充，当前短样例不能作为总体质量百分比。
 
 ## 预算初值
 
-分析限制在 `backend/app/config.py` 中以 `KP_ANALYSIS_*` 配置，T01 取值与理由：
+分析限制在 `backend/app/config.py` 中以 `KP_ANALYSIS_*` 配置，工程初值与理由（当前值以配置文件为准）：
 
 | 配置 | 初值 | 理由 |
 | --- | --- | --- |
@@ -104,5 +104,5 @@ KP_EVAL_EMAIL='...' KP_EVAL_PASSWORD='...' KP_EVAL_TEAM_ID='...' \
 | `analysis_team_max_active_tasks` | 10 | 单团队同时活跃的分析任务数 |
 | `analysis_lease_seconds` | 180 | 分析执行租约，长于单次模型调用超时 |
 
-这些是工程参数，尚无实测容量数据；T08 依据真实语料调整。超限一律显式失败，
+这些是工程参数，尚无实测容量数据；后续依据真实语料调整。超限一律显式失败，
 不截断后继续，也不在结果里把未处理部分当作“未提及”。

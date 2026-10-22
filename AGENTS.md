@@ -7,10 +7,10 @@
 - 应用与工具链已初始化；开发、测试及部署命令以仓库配置和 README 为准，测试须使用独立数据库。
 - 定义或修改领域概念时，先阅读 `GLOSSARY.md`，保持术语一致。
 - 设计、实现或验收 V1 时，先阅读 `V1-SCOPE.md`；其中已确认范围与待定事项须区分处理。
-- 技术选型与部署设计以 `V1-ARCHITECTURE.md` 中已确认方案为准；实施前阅读 `docs/architecture/README.md`，按 `docs/implementation/V1-TASKS.md` 选择小切片，不擅自扩大设计。
-- 设计、实现或验收 V2 时，先读 `V2-SCOPE.md` 与 `docs/architecture/V2-ANALYSIS.md`，按 `docs/implementation/V2-TASKS.md` 逐项实施；范围基线、待确认的量化目标及实际完成情况分别记录。
-- 规划、实现或验收 V4 时，先读 `V4-SCOPE.md` 与 `docs/implementation/V4-TASKS.md`；其中已确认范围、后续候选和实际完成记录分别处理。
-- 规划、实现或验收账号、团队、成员及权限管理时，先读 `V5-SCOPE.md`，按 `docs/implementation/V5-TASKS.md` 选择小切片；范围已确认不代表功能已实施。
+- 技术选型与实施约束以 `docs/architecture/README.md` 为准；实施前阅读 `docs/implementation/README.md`，根据当前状态和待办选择小切片。
+- 设计、实现或验收 V2 时，先读 `V2-SCOPE.md` 与 `docs/architecture/V2-ANALYSIS.md`；范围基线、待确认的量化目标及实际完成情况分别记录。
+- 设计、实现或验收 V3 时，先读 `V3-SCOPE.md`；规划、实现或验收 V4 时，先读 `V4-SCOPE.md`。已确认范围、后续候选和实际完成记录分别处理。
+- 规划、实现或验收账号、团队、成员及权限管理时，先读 `V5-SCOPE.md`；当前有效权限按该文档校验，范围与实际完成状态分别记录。
 
 # 决策与交付
 
