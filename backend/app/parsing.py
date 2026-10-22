@@ -38,6 +38,10 @@ class ExtractedChunk:
     locator_label: str
     locator_start: int | None = None
     locator_end: int | None = None
+    table_number: int | None = None
+    table_row: int | None = None
+    table_headers: list[str] | None = None
+    table_cells: list[str] | None = None
 
 
 @dataclass
@@ -189,33 +193,35 @@ def _extract_docx(data: bytes) -> list[ExtractedChunk]:
 
 
 def _row_texts(row: _Row) -> list[str]:
-    """读取一行单元格文字，合并单元格在 python-docx 中只计一次。"""
+    """读取一行单元格文字，保留空单元格以维持表格列对齐。"""
     values: list[str] = []
     seen: set[int] = set()
     for cell in row.cells:
         marker = id(cell._tc)
         if marker in seen:
+            values.append("")
             continue
         seen.add(marker)
         value = re.sub(r"[ \t\r\n]+", " ", cell.text).strip()
-        if value:
-            values.append(value)
+        values.append(value)
     return values
 
 
 def _extract_docx_table(table: Table, table_number: int) -> list[ExtractedChunk]:
-    """保留普通表格的单元格文字；不尝试还原合并、跨页或嵌套表格结构。"""
+    """保留普通表格的单元格结构与文字；不展开嵌套表格。"""
     rows = [_row_texts(row) for row in table.rows]
-    rows = [row for row in rows if row]
+    rows = [row for row in rows if any(row)]
     if not rows:
         return []
-    header = rows[0] if len(rows) > 1 else []
+    column_count = max(len(row) for row in rows)
+    rows = [row + [""] * (column_count - len(row)) for row in rows]
+    header = rows[0] if len(rows) > 1 else [""] * column_count
     chunks: list[ExtractedChunk] = []
     for row_number, values in enumerate(rows, start=1):
-        if header and len(header) == len(values):
+        if header and any(header):
             content = "；".join(
-                f"{name}：{value}"
-                for name, value in zip(header, values, strict=True)
+                f"{name or f'第 {index + 1} 列'}：{value}"
+                for index, (name, value) in enumerate(zip(header, values, strict=True))
             )
         else:
             content = " | ".join(values)
@@ -223,6 +229,10 @@ def _extract_docx_table(table: Table, table_number: int) -> list[ExtractedChunk]
             chunk.locator_label = (
                 f"第 {table_number} 张表 · 第 {row_number} 行 · {chunk.locator_label}"
             )
+            chunk.table_number = table_number
+            chunk.table_row = row_number
+            chunk.table_headers = header if any(header) else None
+            chunk.table_cells = values
             chunks.append(chunk)
     return chunks
 

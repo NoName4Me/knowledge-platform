@@ -367,6 +367,48 @@
 .analysis-submit { margin-top: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .analysis-submit > span { color: var(--muted); font-size: 11px; line-height: 1.6; }
 .analysis-submit .btn { min-height: 38px; flex-shrink: 0; }
+.automation-private { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.automation-history { width: 212px; }
+.automation-history li small { display: block; margin-top: 6px; }
+.automation-status { display: inline-flex; align-items: center; min-height: 22px; padding: 1px 7px; border-radius: 4px; background: var(--surface-strong); color: var(--muted); font-size: 10px; font-weight: 500; white-space: nowrap; }
+.automation-status--queued, .automation-status--running { color: var(--pending); background: color-mix(in srgb, var(--pending) 9%, var(--surface)); }
+.automation-status--completed { color: var(--accent); background: var(--accent-soft); }
+.automation-status--failed, .automation-status--invalidated { color: var(--danger); background: var(--danger-soft); }
+.automation-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 16px; padding: 12px 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.automation-presets > div { min-width: 0; }
+.automation-presets strong { color: var(--ink); font-size: 11px; }
+.automation-presets__chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.automation-presets__chips button { min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--accent); font-size: 10px; }
+.automation-presets__chips button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.automation-report-requirements { display: grid; gap: 13px; }
+.automation-report-requirements legend { margin-bottom: 8px; }
+.automation-text-field textarea { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.7; resize: vertical; }
+.automation-length-field select { width: 140px; min-height: 38px; padding: 0 9px; border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font-size: 12px; }
+.automation-result-note, .automation-stopped-note { display: flex; align-items: flex-start; gap: 11px; padding: 15px 16px; border-left: 2px solid var(--accent); background: var(--accent-soft); color: var(--accent); }
+.automation-result-note > svg { flex-shrink: 0; margin-top: 1px; }
+.automation-result-note strong, .automation-stopped-note strong { color: var(--ink); font-size: 12px; }
+.automation-result-note p, .automation-stopped-note p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.75; }
+.automation-stopped-note { display: block; border-left-color: var(--muted); background: var(--surface-subtle); }
+.automation-plan, .automation-timeline { margin-top: 22px; }
+.automation-plan { padding: 15px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.automation-plan h3, .automation-timeline h3 { font-size: 13px; }
+.automation-plan dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; margin-top: 14px; }
+.automation-plan dt { color: var(--muted); font-size: 10px; }
+.automation-plan dd { margin-top: 4px; color: var(--ink); font-size: 11px; line-height: 1.75; overflow-wrap: anywhere; }
+.automation-timeline__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.automation-timeline__head > span { color: var(--muted); font-size: 10px; }
+.automation-steps { list-style: none; margin: 12px 0 0; padding: 0; }
+.automation-step { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 9px; padding-bottom: 16px; }
+.automation-step:not(:last-child)::before { content: ""; position: absolute; left: 12px; top: 25px; bottom: 0; width: 1px; background: var(--line); }
+.automation-step__mark { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--muted); }
+.automation-step--succeeded .automation-step__mark { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.automation-step--started .automation-step__mark { border-color: var(--pending); background: color-mix(in srgb, var(--pending) 9%, var(--surface)); }
+.automation-step--failed .automation-step__mark, .automation-step--canceled .automation-step__mark { border-color: var(--danger); background: var(--danger-soft); }
+.automation-step__title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-height: 25px; }
+.automation-step__title strong { font-size: 11px; }
+.automation-step__title span { padding: 1px 6px; border-radius: 4px; background: var(--surface-strong); color: var(--muted); font-size: 9px; }
+.automation-step__title small { margin-left: auto; color: var(--muted); font-size: 9px; }
+.automation-step p, .automation-step > div > small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
 .analysis-detail { padding: 24px; }
 .analysis-detail__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
 .analysis-detail__eyebrow { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 10px; }
@@ -374,6 +416,8 @@
 .analysis-detail__head h2 { margin-top: 5px; font-size: 19px; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .analysis-detail__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .analysis-rerun { min-height: 32px; padding-inline: 10px; font-size: 11px; }
+.analysis-delete { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 32%, var(--line)); }
+.analysis-delete:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 .analysis-status { display: inline-flex; align-items: center; min-height: 22px; padding: 1px 7px; border-radius: 4px; background: var(--surface-strong); color: var(--muted); font-size: 10px; font-weight: 500; white-space: nowrap; }
 .analysis-status--queued, .analysis-status--running, .analysis-status--doc-queued, .analysis-status--doc-running { color: var(--pending); background: color-mix(in srgb, var(--pending) 9%, var(--surface)); }
 .analysis-status--completed, .analysis-status--doc-succeeded, .analysis-status--field-extracted { color: var(--accent); background: var(--accent-soft); }
@@ -459,6 +503,7 @@
   .analysis-field-row { grid-template-columns: minmax(0, 1fr) 100px 36px; }
   .analysis-field--description { grid-column: 1 / -1; grid-row: 2; }
   .analysis-field-row__remove { grid-column: 3; grid-row: 1; }
+  .automation-presets { grid-template-columns: 1fr; }
 }
 @container (max-width: 800px) {
   .analysis-form-grid { grid-template-columns: 1fr; }
@@ -482,12 +527,17 @@
   .analysis-form-grid, .analysis-field-row { grid-template-columns: 1fr; }
   .analysis-field--description, .analysis-field-row__remove { grid-column: auto; grid-row: auto; }
   .analysis-field-row__remove { justify-self: end; }
+  .automation-plan dl { grid-template-columns: 1fr; }
   .analysis-submit { align-items: flex-start; flex-direction: column; }
   .analysis-submit .btn { width: 100%; }
   .analysis-detail__head { flex-direction: column; gap: 10px; }
   .analysis-detail__actions { width: 100%; justify-content: space-between; }
   .analysis-citation-group ol { padding-left: 12px; }
   .analysis-citation-group blockquote { padding-left: 0; }
+  .automation-panel .analysis-history { max-height: none; }
+  .automation-panel .analysis-history ul { display: grid; grid-template-columns: minmax(0, 1fr); overflow: visible; }
+  .automation-panel .analysis-history li { min-width: 0; }
+  .automation-panel .analysis-history li button { min-height: 74px; }
 }
 
 

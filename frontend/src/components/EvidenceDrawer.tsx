@@ -36,7 +36,22 @@ export function EvidenceDrawer({ teamId }: { teamId: string }) {
             onFocus={() => hover(source.id)} onBlur={() => hover(null)} onClick={() => select(source.id)}
             onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); select(source.id); } }}>
             <div className="evidence-source__head"><span>{source.number}</span><div><h3>{source.title}</h3><p>{source.locator}</p></div></div>
-            {source.excerpt ? <blockquote>{source.excerpt}</blockquote> : <p className="evidence-source__deleted">原始资料已删除或不再可用，保留来源信息。</p>}
+            {source.table ? (
+              <div className="evidence-table-scroll" tabIndex={0} aria-label={`第 ${source.table.number} 张表，可横向滚动`}>
+                <table className="evidence-table">
+                  <caption>第 {source.table.number} 张表</caption>
+                  {source.table.headers && (
+                    <thead><tr>{source.table.headers.map((header, index) => <th scope="col" key={`${index}-${header}`}>{header || `第 ${index + 1} 列`}</th>)}</tr></thead>
+                  )}
+                  <tbody>
+                    {source.table.rows.map((row) => <tr key={row.key} data-source-id={row.id} className={`evidence-table__row${row.id === activeId ? " is-active" : ""}`} onMouseEnter={() => hover(row.id)} onMouseLeave={() => hover(null)} onFocus={() => hover(row.id)} onBlur={() => hover(null)} onClick={() => select(row.id)} tabIndex={0}>
+                      <th scope="row">{row.row}</th>
+                      {row.cells.map((cell, index) => <td key={`${index}-${cell}`}>{cell || "—"}</td>)}
+                    </tr>)}
+                  </tbody>
+                </table>
+              </div>
+            ) : source.excerpt ? <blockquote>{source.excerpt}</blockquote> : <p className="evidence-source__deleted">原始资料已删除或不再可用，保留来源信息。</p>}
             {source.excerpt && <a href={`/api/teams/${teamId}/documents/${source.documentId}/content`} target="_blank" rel="noopener noreferrer">打开原文件 <Icon name="external" size={13} /></a>}
           </article>
         </li>)}</ol>

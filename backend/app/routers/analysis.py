@@ -9,13 +9,13 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app import analysis
 from app.analysis_contract import AnalysisError
 from app.auth import TeamContext, get_team_context
-from app.db import get_session
+from app.db import apply_context, get_session
 from app.models import (
     AnalysisCitation,
     AnalysisConclusion,
@@ -25,6 +25,9 @@ from app.models import (
     AnalysisSummary,
     AnalysisTask,
     Document,
+    KnowledgeAutomation,
+    Report,
+    ReportSource,
 )
 from app.schemas import (
     AnalysisCitationOut,
@@ -143,8 +146,17 @@ def get_analysis(
     context: TeamContext = Depends(get_team_context),
     session: Session = Depends(get_session),
 ) -> AnalysisDetailOut:
-    task = _task_or_404(session, context, task_id)
-    if task.knowledge_base_id != knowledge_base_id:
+    task = session.scalar(
+        select(AnalysisTask)
+        .where(
+            AnalysisTask.id == task_id,
+            AnalysisTask.team_id == context.team.id,
+            AnalysisTask.knowledge_base_id == knowledge_base_id,
+            AnalysisTask.created_by_id == context.user.id,
+        )
+        .with_for_update()
+    )
+    if task is None:
         raise _not_found()
 
     executions = list(
@@ -219,6 +231,71 @@ def get_analysis(
         source_valid=not invalid,
         invalid_reason=invalid_reason,
     )
+
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_analysis(
+    team_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    task_id: uuid.UUID,
+    context: TeamContext = Depends(get_team_context),
+    session: Session = Depends(get_session),
+) -> None:
+    task = _task_or_404(session, context, task_id)
+    if task.knowledge_base_id != knowledge_base_id:
+        raise _not_found()
+    if task.status in analysis.ACTIVE_TASK_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "ANALYSIS_ACTIVE",
+                "message": "分析仍在处理中；请等待完成，或先取消对应的自动成稿后再删除。",
+            },
+        )
+
+    report_ids = list(
+        session.scalars(select(Report.id).where(Report.source_analysis_id == task.id))
+    )
+    if report_ids:
+        # ReportSource 的复合唯一键包含来源 ID；删除前换成不可冲突的旧 ID，
+        # 并保留可读的冻结标题快照。报告正文与章节引用不变。
+        sources = list(
+            session.scalars(
+                select(ReportSource).where(
+                    ReportSource.report_id.in_(report_ids),
+                    ReportSource.source_type == "analysis",
+                    ReportSource.source_id == task.id,
+                )
+            )
+        )
+        for source in sources:
+            source.source_id = uuid.uuid4()
+            source.title_snapshot = f"{source.title_snapshot}（来源分析已删除）"[:300]
+        session.execute(
+            update(Report)
+            .where(Report.id.in_(report_ids), Report.source_analysis_id == task.id)
+            .values(source_analysis_id=None)
+        )
+    session.execute(
+        update(KnowledgeAutomation)
+        .where(
+            KnowledgeAutomation.team_id == task.team_id,
+            KnowledgeAutomation.knowledge_base_id == task.knowledge_base_id,
+            KnowledgeAutomation.created_by_id == task.created_by_id,
+            KnowledgeAutomation.analysis_id == task.id,
+        )
+        .values(analysis_id=None)
+    )
+    session.execute(
+        update(AnalysisTask)
+        .where(AnalysisTask.source_task_id == task.id)
+        .values(source_task_id=None)
+    )
+    # 同一事务先触发了跨表更新；在父任务删除前显式恢复已校验的本人范围。
+    apply_context(session, team_id=task.team_id, user_id=task.created_by_id)
+    session.delete(task)
+    session.flush()
+    session.commit()
 
 
 def _results(
@@ -322,6 +399,10 @@ def _citations(
                     document_title=title,
                     locator_label=citation.locator_label,
                     excerpt=citation.excerpt,
+                    table_number=citation.table_number,
+                    table_row=citation.table_row,
+                    table_headers=citation.table_headers,
+                    table_cells=citation.table_cells,
                 ),
                 target_id,
             )

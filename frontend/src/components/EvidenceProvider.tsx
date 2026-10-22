@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { Context, type EvidenceRequest, type OpenEvidence } from "../lib/evidence-context";
+import { groupEvidenceTables } from "../lib/citation-text";
 
 export function EvidenceProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<OpenEvidence | null>(null);
@@ -20,9 +21,19 @@ export function EvidenceProvider({ children }: { children: ReactNode }) {
     setData({ ...request, sources: [], loading: true, error: "" });
     void request.load().then((sources) => {
       if (revision !== requestId.current) return;
-      setData({ ...request, sources, loading: false, error: "" });
-      setSelected(request.selected && sources.some((source) => source.id === request.selected)
-        ? request.selected : sources[0]?.id ?? null);
+      const groupedSources = groupEvidenceTables(sources);
+      setData({ ...request, sources: groupedSources, loading: false, error: "" });
+      const requestedSource = sources.find((source) => source.id === request.selected);
+      const tableTarget = requestedSource?.table
+        ? `${requestedSource.documentId}:${requestedSource.table.number}`
+        : null;
+      setSelected(
+        tableTarget && groupedSources.some((source) => source.id === tableTarget)
+          ? tableTarget
+          : request.selected && groupedSources.some((source) => source.id === request.selected)
+            ? request.selected
+            : groupedSources[0]?.id ?? null,
+      );
     }).catch((error) => {
       if (revision !== requestId.current) return;
       setData({ ...request, sources: [], loading: false, error: error instanceof Error ? error.message : "引用加载失败，请重试" });

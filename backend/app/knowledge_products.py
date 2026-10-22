@@ -20,7 +20,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.analysis import source_fingerprint
@@ -35,6 +35,7 @@ from app.models import (
     AnalysisTask,
     Document,
     DocumentChunk,
+    KnowledgeAutomation,
     KnowledgeBase,
     KnowledgeNote,
     Report,
@@ -282,6 +283,10 @@ def _analysis_payload(
                 "document_title": titles.get(citation.document_id, "资料"),
                 "locator_label": citation.locator_label,
                 "excerpt": citation.excerpt,
+                "table_number": citation.table_number,
+                "table_row": citation.table_row,
+                "table_headers": citation.table_headers,
+                "table_cells": citation.table_cells,
             }
         )
     results = list(
@@ -512,11 +517,15 @@ def _report_out(session: Session, report: Report) -> ReportOut:
                 )
                 is not None
             )
-        else:
+        elif source.source_type == "analysis":
             task = session.get(AnalysisTask, source.source_id)
-            available[str(source.source_id)] = bool(
-                task is not None and task.status in {"completed", "partial"}
-            )
+            # 删除分析后来源快照仍用于解释报告出处；ID 已解除关联时视为已删除。
+            available[str(source.source_id)] = task is not None and task.status in {
+                "completed",
+                "partial",
+            }
+        else:
+            available[str(source.source_id)] = False
     return ReportOut(
         id=report.id,
         knowledge_base_id=report.knowledge_base_id,
@@ -1090,6 +1099,17 @@ def delete_report(
     session: Session, context: TeamContext, kb_id: uuid.UUID, report_id: uuid.UUID
 ) -> None:
     report = _report(session, context, kb_id, report_id)
+    # 复合外键不能只把 report_id 置空而不影响团队/知识库/创建者，因此先解除关联。
+    session.execute(
+        update(KnowledgeAutomation)
+        .where(
+            KnowledgeAutomation.team_id == context.team.id,
+            KnowledgeAutomation.knowledge_base_id == kb_id,
+            KnowledgeAutomation.created_by_id == context.user.id,
+            KnowledgeAutomation.report_id == report.id,
+        )
+        .values(report_id=None)
+    )
     session.delete(report)
     session.flush()
 

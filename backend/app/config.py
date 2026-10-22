@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     analysis_team_max_active_tasks: int = 10
     analysis_lease_seconds: int = 180
 
+    # V4 固定计划协调；子分析与模型调用沿用 V2 的预算和上限。
+    automation_max_attempts: int = 2
+    automation_user_max_active: int = 2
+    automation_team_max_active: int = 10
+    automation_lease_seconds: int = 60
+
     # 当前部署为单 API 进程，使用进程内固定窗口限流。
     login_email_rate_limit: int = 10
     login_ip_rate_limit: int = 50

@@ -160,6 +160,8 @@ def test_report_from_analysis_edit_reopen_and_export(client, session):
     assert pdf_export.status_code == 200
     assert pdf_export.headers["content-type"] == "application/pdf"
     assert len(PdfReader(io.BytesIO(pdf_export.content)).pages) >= 1
+    assert client.delete(f"{base}/{report['id']}").status_code == 204
+    assert client.get(f"{base}/{report['id']}").status_code == 404
 
 
 def test_report_keeps_saved_content_when_source_is_deleted(client, session):

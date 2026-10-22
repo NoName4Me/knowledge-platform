@@ -53,3 +53,41 @@ export function turnEvidence(turn: Turn): EvidenceSource[] {
       locator: citation.locator_label, excerpt: citation.excerpt };
   });
 }
+
+/** 同一张表的多个行片段共享一个依据入口；旧引用没有结构时保持逐条文本。 */
+export function groupEvidenceTables(sources: EvidenceSource[]): EvidenceSource[] {
+  const grouped = new Map<string, EvidenceSource>();
+  for (const source of sources) {
+    const table = source.table;
+    if (!table) {
+      grouped.set(source.id, source);
+      continue;
+    }
+    const key = `${source.documentId}:${table.number}`;
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        ...source,
+        id: key,
+        number: source.number,
+        locator: `第 ${table.number} 张表 · ${table.rows.length} 行`,
+      });
+      continue;
+    }
+    const rows = [...(existing.table?.rows ?? []), ...table.rows];
+    const headers =
+      existing.table?.headers?.length
+        ? existing.table.headers
+        : table.headers;
+    grouped.set(key, {
+      ...existing,
+      locator: `第 ${table.number} 张表 · ${new Set(rows.map((row) => row.key)).size} 行`,
+      table: {
+        number: table.number,
+        headers,
+        rows: [...new Map(rows.map((row) => [row.key, row])).values()],
+      },
+    });
+  }
+  return [...grouped.values()];
+}

@@ -255,6 +255,10 @@ class DocumentChunk(Base):
     locator_label: Mapped[str] = mapped_column(String(200))
     locator_start: Mapped[int | None] = mapped_column(Integer)
     locator_end: Mapped[int | None] = mapped_column(Integer)
+    table_number: Mapped[int | None] = mapped_column(Integer)
+    table_row: Mapped[int | None] = mapped_column(Integer)
+    table_headers: Mapped[list[str] | None] = mapped_column(JSONB)
+    table_cells: Mapped[list[str] | None] = mapped_column(JSONB)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -863,6 +867,10 @@ class AnalysisCitation(Base):
     ordinal: Mapped[int] = mapped_column(Integer)
     locator_label: Mapped[str] = mapped_column(String(200))
     excerpt: Mapped[str] = mapped_column(Text)
+    table_number: Mapped[int | None] = mapped_column(Integer)
+    table_row: Mapped[int | None] = mapped_column(Integer)
+    table_headers: Mapped[list[str] | None] = mapped_column(JSONB)
+    table_cells: Mapped[list[str] | None] = mapped_column(JSONB)
     source_fingerprint: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -1105,3 +1113,177 @@ class SavedRequirement(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+# ---------------------------------------------------------------------------
+# V4 从分析到报告的后台执行
+# ---------------------------------------------------------------------------
+
+AUTOMATION_STATUSES = (
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "canceled",
+    "invalidated",
+)
+AUTOMATION_STAGES = (
+    "queued",
+    "analysis",
+    "report",
+    "canceling",
+    "finished",
+)
+AUTOMATION_STEP_KINDS = ("start", "analysis", "report", "cancel", "continue")
+AUTOMATION_STEP_STATUSES = ("started", "succeeded", "failed", "canceled")
+
+
+class KnowledgeAutomation(Base):
+    """本人确认的固定计划，协调一项分析与由它生成的报告草稿。"""
+
+    __tablename__ = "knowledge_automations"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('queued', 'running', 'completed', 'failed', 'canceled', 'invalidated')",
+            name="ck_automation_status",
+        ),
+        CheckConstraint(
+            "stage in ('queued', 'analysis', 'report', 'canceling', 'finished')",
+            name="ck_automation_stage",
+        ),
+        CheckConstraint(
+            "analysis_kind in ('extraction', 'comparison')",
+            name="ck_automation_analysis_kind",
+        ),
+        CheckConstraint(
+            "report_length in ('short', 'medium', 'long')",
+            name="ck_automation_report_length",
+        ),
+        CheckConstraint("document_count > 0", name="ck_automation_document_count"),
+        CheckConstraint("attempts >= 0 and max_attempts > 0", name="ck_automation_attempts"),
+        UniqueConstraint(
+            "team_id",
+            "created_by_id",
+            "idempotency_key",
+            name="uq_automation_idempotency",
+        ),
+        UniqueConstraint(
+            "team_id",
+            "knowledge_base_id",
+            "id",
+            "created_by_id",
+            name="uq_automation_owner_scope",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "team_id"],
+            ["knowledge_bases.id", "knowledge_bases.team_id"],
+            name="fk_automation_kb_team",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "analysis_id", "created_by_id"],
+            [
+                "analysis_tasks.team_id",
+                "analysis_tasks.knowledge_base_id",
+                "analysis_tasks.id",
+                "analysis_tasks.created_by_id",
+            ],
+            name="fk_automation_analysis_owner",
+        ),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "report_id", "created_by_id"],
+            [
+                "reports.team_id",
+                "reports.knowledge_base_id",
+                "reports.id",
+                "reports.created_by_id",
+            ],
+            name="fk_automation_report_owner",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), index=True
+    )
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    idempotency_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(120))
+    analysis_title: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(20), default="queued")
+    analysis_kind: Mapped[str] = mapped_column(String(20))
+    document_ids: Mapped[list[str]] = mapped_column(JSONB)
+    fields: Mapped[list[dict[str, object]]] = mapped_column(JSONB)
+    report_title: Mapped[str] = mapped_column(String(200))
+    report_purpose: Mapped[str] = mapped_column(Text, default="")
+    report_focus: Mapped[str] = mapped_column(Text, default="")
+    report_length: Mapped[str] = mapped_column(String(20), default="medium")
+    analysis_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    report_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    document_count: Mapped[int] = mapped_column(Integer)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    continue_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_after_continue: Mapped[bool] = mapped_column(
+        default=False, server_default=text("false")
+    )
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_detail: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class KnowledgeAutomationStep(Base):
+    """执行步骤与受限审计事件；只保存 ID、结果与元数据，不复制私人正文。"""
+
+    __tablename__ = "knowledge_automation_steps"
+    __table_args__ = (
+        CheckConstraint(
+            "kind in ('start', 'analysis', 'report', 'cancel', 'continue')",
+            name="ck_automation_step_kind",
+        ),
+        CheckConstraint(
+            "status in ('started', 'succeeded', 'failed', 'canceled')",
+            name="ck_automation_step_status",
+        ),
+        ForeignKeyConstraint(
+            ["team_id", "knowledge_base_id", "automation_id", "owner_id"],
+            [
+                "knowledge_automations.team_id",
+                "knowledge_automations.knowledge_base_id",
+                "knowledge_automations.id",
+                "knowledge_automations.created_by_id",
+            ],
+            name="fk_automation_step_owner",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    automation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    ordinal: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20))
+    target_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    request_id: Mapped[str | None] = mapped_column(String(80))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    detail: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

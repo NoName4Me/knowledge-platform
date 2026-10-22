@@ -30,6 +30,7 @@ type Props = {
   knowledgeBaseId: string;
   knowledgeBaseName: string;
   documents: DocumentItem[];
+  initialTaskId?: string | null;
   onError: (message: string) => void;
   onReportCreated: (reportId: string) => void;
 };
@@ -151,8 +152,23 @@ function CitationList({ citations, label, loadDetail }: {
       return citations.map((item, index): EvidenceSource => {
         const citation = available.get(item.id);
         if (!citation) throw new Error("这组依据已不可用，请重新加载分析记录");
+        const table =
+          citation.table_number && citation.table_row && citation.table_cells
+            ? {
+                number: citation.table_number,
+                headers: citation.table_headers ?? null,
+                rows: [{
+                  key: citation.id,
+                  row: citation.table_row,
+                  cells: citation.table_cells,
+                  id: citation.id,
+                  number: index + 1,
+                }],
+              }
+            : undefined;
         return { id: citation.id, number: index + 1, documentId: citation.document_id,
-          title: citation.document_title, locator: citation.locator_label, excerpt: citation.excerpt };
+          title: citation.document_title, locator: citation.locator_label, excerpt: citation.excerpt,
+          table };
       });
     } });
   }}><Icon name="quote" size={14} />查看依据<span>{citations.length}</span></button>;
@@ -406,12 +422,16 @@ function AnalysisDetailView({
   canRerun,
   onRerun,
   onCreateReport,
+  onDelete,
+  deleting,
   loadDetail,
 }: {
   detail: AnalysisDetailOut;
   canRerun: boolean;
   onRerun: () => void;
   onCreateReport: () => Promise<void>;
+  onDelete: () => Promise<void>;
+  deleting: boolean;
   loadDetail: () => Promise<AnalysisDetailOut>;
 }) {
   const evidence = useEvidence();
@@ -454,6 +474,15 @@ function AnalysisDetailView({
               重新运行
             </button>
           )}
+          <button
+            className="btn btn--ghost analysis-delete"
+            type="button"
+            onClick={() => void onDelete()}
+            disabled={deleting || isActive(detail.task)}
+          >
+            <Icon name="trash" size={15} />
+            {deleting ? "删除中…" : "删除分析"}
+          </button>
         </div>
       </div>
 
@@ -513,6 +542,7 @@ export function AnalysisPanel({
   knowledgeBaseId,
   knowledgeBaseName,
   documents,
+  initialTaskId,
   onError,
   onReportCreated,
 }: Props) {
@@ -520,7 +550,7 @@ export function AnalysisPanel({
   const [tasks, setTasks] = useState<AnalysisTaskOut[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialTaskId ?? null);
   const [detail, setDetail] = useState<AnalysisDetailOut | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -538,6 +568,7 @@ export function AnalysisPanel({
   const [savedFields, setSavedFields] = useState<SavedRequirementOut[]>([]);
   const [savePresetOpen, setSavePresetOpen] = useState(false);
   const [presetName, setPresetName] = useState("");
+  const [deleting, setDeleting] = useState(false);
   // 重新运行会预填旧配置并记录来源任务；用户改动表单后视为新分析，不再挂来源。
   const [sourceTask, setSourceTask] = useState<{
     id: string;
@@ -875,6 +906,31 @@ export function AnalysisPanel({
     }
   }
 
+  async function removeAnalysis() {
+    if (!detail || deleting || isActive(detail.task)) return;
+    if (!window.confirm(
+      `删除分析“${detail.task.title}”？已生成的报告、正文及引用快照会保留，报告中的分析来源将标记为已删除。`,
+    )) return;
+    setDeleting(true);
+    try {
+      await api.deleteAnalysis(teamId, knowledgeBaseId, detail.task.id);
+      evidence.close();
+      setDetail(null);
+      setSelectedId(null);
+      setTasks((current) => current.filter((task) => task.id !== detail.task.id));
+      await loadHistory();
+    } catch (err) {
+      onError(errorMessage(err, "删除分析失败"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const requirementPlaceholder =
+    kind === "comparison"
+      ? "例如：比较三份合同的有效期、付款条件和违约限制"
+      : "例如：提取每份制度中的适用范围、生效日期和责任主体";
+
   return (
     <section className="analysis-panel" aria-labelledby="analysis-heading">
       <div className="panel__head analysis-panel__head">
@@ -1001,7 +1057,7 @@ export function AnalysisPanel({
                       onChange={(event) => setRequirementText(event.target.value)}
                       rows={3}
                       maxLength={2000}
-                      placeholder="例如：比较三份合同的有效期、付款条件和违约限制"
+                      placeholder={requirementPlaceholder}
                       disabled={submitting || suggestingFields}
                     />
                     <button
@@ -1172,6 +1228,8 @@ export function AnalysisPanel({
               detail={detail}
               loadDetail={() => api.getAnalysis(teamId, knowledgeBaseId, detail.task.id)}
               onCreateReport={createReport}
+              onDelete={removeAnalysis}
+              deleting={deleting}
               canRerun={
                 detail.task.status !== "queued" &&
                 detail.task.status !== "running" &&

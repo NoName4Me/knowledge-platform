@@ -3,7 +3,7 @@
 // 生成命令：cd backend && .venv/bin/python -m app.typegen
 // 一致性校验：cd backend && .venv/bin/python -m app.typegen --check
 //
-// 来源：backend/app/schemas.py 中 EXPORTED_MODELS 登记的 V2 合同模型。
+// 来源：backend/app/schemas.py 中 EXPORTED_MODELS 登记的 V2/V4 合同模型。
 
 export type AnalysisFieldInput = {
   name: string;
@@ -55,6 +55,10 @@ export type AnalysisCitationOut = {
   document_title: string;
   locator_label: string;
   excerpt: string;
+  table_number?: number | null;
+  table_row?: number | null;
+  table_headers?: string[] | null;
+  table_cells?: string[] | null;
 };
 
 export type AnalysisFieldResultOut = {
@@ -374,4 +378,86 @@ export type DocumentImpactOut = {
 export type DocumentReplaceOut = {
   document: DocumentOut;
   affected: DocumentImpactOut;
+};
+
+export type AutomationCreateRequest = {
+  kind: "extraction" | "comparison";
+  document_ids: string[];
+  fields: AnalysisFieldInput[];
+  analysis_title?: string | null;
+  report_title?: string;
+  report_purpose?: string;
+  report_focus?: string;
+  report_length?: "short" | "medium" | "long";
+};
+
+export type AutomationStepOut = {
+  id: string;
+  ordinal: number;
+  kind: string;
+  status: string;
+  target_id: string | null;
+  error_code: string | null;
+  detail: string | null;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export type AutomationOut = {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  status: "queued" | "running" | "completed" | "failed" | "canceled" | "invalidated";
+  stage: "queued" | "analysis" | "report" | "canceling" | "finished";
+  analysis_kind: "extraction" | "comparison";
+  document_ids: string[];
+  document_count: number;
+  fields: AnalysisFieldInput[];
+  analysis_title: string;
+  report_title: string;
+  report_purpose: string;
+  report_focus: string;
+  report_length: "short" | "medium" | "long";
+  analysis_id: string | null;
+  report_id: string | null;
+  attempts: number;
+  max_attempts: number;
+  error_code: "AUTOMATION_INVALID_INPUT" | "AUTOMATION_SOURCE_UNAVAILABLE" | "AUTOMATION_IDEMPOTENCY_CONFLICT" | "AUTOMATION_LIMIT_EXCEEDED" | "AUTOMATION_ANALYSIS_PARTIAL" | "AUTOMATION_ANALYSIS_FAILED" | "AUTOMATION_ANALYSIS_INVALIDATED" | "AUTOMATION_REPORT_FAILED" | "AUTOMATION_PERMISSION_REVOKED" | "AUTOMATION_EXHAUSTED" | null;
+  error_detail: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type AutomationDetailOut = {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  status: "queued" | "running" | "completed" | "failed" | "canceled" | "invalidated";
+  stage: "queued" | "analysis" | "report" | "canceling" | "finished";
+  analysis_kind: "extraction" | "comparison";
+  document_ids: string[];
+  document_count: number;
+  fields: AnalysisFieldInput[];
+  analysis_title: string;
+  report_title: string;
+  report_purpose: string;
+  report_focus: string;
+  report_length: "short" | "medium" | "long";
+  analysis_id: string | null;
+  report_id: string | null;
+  attempts: number;
+  max_attempts: number;
+  error_code: "AUTOMATION_INVALID_INPUT" | "AUTOMATION_SOURCE_UNAVAILABLE" | "AUTOMATION_IDEMPOTENCY_CONFLICT" | "AUTOMATION_LIMIT_EXCEEDED" | "AUTOMATION_ANALYSIS_PARTIAL" | "AUTOMATION_ANALYSIS_FAILED" | "AUTOMATION_ANALYSIS_INVALIDATED" | "AUTOMATION_REPORT_FAILED" | "AUTOMATION_PERMISSION_REVOKED" | "AUTOMATION_EXHAUSTED" | null;
+  error_detail: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: AutomationStepOut[];
+};
+
+export type AutomationListOut = {
+  items: AutomationOut[];
 };

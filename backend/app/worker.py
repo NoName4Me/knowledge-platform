@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app import analysis, db
+from app import analysis, automation, db
 from app.analysis_tasks import (
     AnalysisLeaseLost,
     claim_next_document,
@@ -17,7 +17,7 @@ from app.analysis_tasks import (
 from app.config import get_settings
 from app.db import apply_context
 from app.embeddings import get_embedding_provider
-from app.models import Document, DocumentChunk, ProcessingTask
+from app.models import Document, DocumentChunk, KnowledgeAutomation, ProcessingTask
 from app.parsing import UnsupportedDocument, extract_document
 from app.reconciliation import reconcile_uploads_once
 from app.storage import get_object_store
@@ -111,6 +111,10 @@ def process_task(
             locator_label=extracted.locator_label,
             locator_start=extracted.locator_start,
             locator_end=extracted.locator_end,
+            table_number=extracted.table_number,
+            table_row=extracted.table_row,
+            table_headers=extracted.table_headers,
+            table_cells=extracted.table_cells,
             embedding=vector,
         )
         for index, (extracted, vector) in enumerate(zip(extracted.chunks, vectors, strict=True))
@@ -239,6 +243,61 @@ def _run_summary_once() -> bool:
     return True
 
 
+def _run_automation_once() -> bool:
+    """协调一个有界步骤；每次只领取、保存状态并归还调度。"""
+    with db.SessionLocal() as session:
+        claimed = automation.claim_next(session)
+        session.commit()
+        if claimed is None:
+            session.rollback()
+            return False
+
+    with db.SessionLocal() as session:
+        try:
+            outcome = automation.run_once(
+                session,
+                automation_id=claimed.automation_id,
+                team_id=claimed.team_id,
+                owner_id=claimed.owner_id,
+                lease_token=claimed.lease_token,
+            )
+        except automation.AutomationLeaseLost:
+            session.rollback()
+            logger.warning("自动执行 %s 租约已失效，放弃发布", claimed.automation_id)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            session.rollback()
+            logger.exception("自动执行 %s 异常", claimed.automation_id, exc_info=exc)
+            with db.SessionLocal() as recovery:
+                apply_context(
+                    recovery, team_id=claimed.team_id, user_id=claimed.owner_id
+                )
+                item = recovery.get(KnowledgeAutomation, claimed.automation_id)
+                if item is not None and item.lease_token == claimed.lease_token:
+                    if item.attempts < item.max_attempts:
+                        item.error_code = "AUTOMATION_EXHAUSTED"
+                        item.error_detail = "协调步骤发生未预期错误，正在自动重试"
+                        automation.release_lease(recovery, item, reset_attempts=False)
+                    else:
+                        automation.finish(
+                            recovery,
+                            item,
+                            status="failed",
+                            error_code="AUTOMATION_EXHAUSTED",
+                            detail="协调步骤发生未预期错误，重试次数已用完",
+                        )
+                    recovery.commit()
+            return True
+        else:
+            logger.info("自动执行 %s 结束：%s", claimed.automation_id, outcome)
+    return True
+
+
+def _run_analysis_path_once() -> bool:
+    """按固定顺序推进自动执行、对比汇总和逐文档分析。"""
+    return _run_automation_once() or _run_summary_once() or _run_analysis_once()
+
+
 def _run_parsing_once() -> bool:
     with db.SessionLocal() as session:
         reclaimed = reclaim_expired_tasks(session)
@@ -296,7 +355,7 @@ def run_once() -> bool:
                 worked = True
                 _LAST_SCHEDULED = "parsing"
                 break
-        elif _run_summary_once() or _run_analysis_once():
+        elif _run_analysis_path_once():
             worked = True
             _LAST_SCHEDULED = "analysis"
             break

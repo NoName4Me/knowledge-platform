@@ -259,6 +259,10 @@ class AnalysisCitationOut(BaseModel):
     document_title: str
     locator_label: str
     excerpt: str
+    table_number: int | None = None
+    table_row: int | None = None
+    table_headers: list[str] | None = None
+    table_cells: list[str] | None = None
 
 
 class AnalysisFieldResultOut(BaseModel):
@@ -584,3 +588,85 @@ class ReportSectionSuggestionOut(BaseModel):
     suggestion: str
     rationale: str
     provider: str
+
+
+# ---------------------------------------------------------------------------
+# V4 固定计划的从分析到报告执行
+# ---------------------------------------------------------------------------
+
+AutomationStatus = Literal[
+    "queued", "running", "completed", "failed", "canceled", "invalidated"
+]
+AutomationStage = Literal["queued", "analysis", "report", "canceling", "finished"]
+AutomationErrorCode = Literal[
+    "AUTOMATION_INVALID_INPUT",
+    "AUTOMATION_SOURCE_UNAVAILABLE",
+    "AUTOMATION_IDEMPOTENCY_CONFLICT",
+    "AUTOMATION_LIMIT_EXCEEDED",
+    "AUTOMATION_ANALYSIS_PARTIAL",
+    "AUTOMATION_ANALYSIS_FAILED",
+    "AUTOMATION_ANALYSIS_INVALIDATED",
+    "AUTOMATION_REPORT_FAILED",
+    "AUTOMATION_PERMISSION_REVOKED",
+    "AUTOMATION_EXHAUSTED",
+]
+
+
+class AutomationCreateRequest(BaseModel):
+    kind: AnalysisKind
+    document_ids: list[uuid.UUID] = Field(min_length=1, max_length=10)
+    fields: list[AnalysisFieldInput] = Field(min_length=1, max_length=20)
+    analysis_title: str | None = Field(default=None, max_length=120)
+    report_title: str = Field(default="", max_length=200)
+    report_purpose: str = Field(default="", max_length=2000)
+    report_focus: str = Field(default="", max_length=2000)
+    report_length: ReportLength = "medium"
+
+
+class AutomationStepOut(BaseModel):
+    id: uuid.UUID
+    ordinal: int
+    kind: str
+    status: str
+    target_id: uuid.UUID | None
+    error_code: str | None
+    detail: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class AutomationOut(BaseModel):
+    """执行元数据与确认计划；不重复返回分析字段值、报告正文或原文摘录。"""
+
+    id: uuid.UUID
+    knowledge_base_id: uuid.UUID
+    title: str
+    status: AutomationStatus
+    stage: AutomationStage
+    analysis_kind: AnalysisKind
+    document_ids: list[uuid.UUID]
+    document_count: int
+    fields: list[AnalysisFieldInput]
+    analysis_title: str
+    report_title: str
+    report_purpose: str
+    report_focus: str
+    report_length: ReportLength
+    analysis_id: uuid.UUID | None
+    report_id: uuid.UUID | None
+    attempts: int
+    max_attempts: int
+    error_code: AutomationErrorCode | None
+    error_detail: str | None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class AutomationDetailOut(AutomationOut):
+    steps: list[AutomationStepOut]
+
+
+class AutomationListOut(BaseModel):
+    items: list[AutomationOut]

@@ -356,6 +356,10 @@ def _publish(
                     ordinal=citation_ordinal,
                     locator_label=source.locator_label,
                     excerpt=source.excerpt,
+                    table_number=source.table_number,
+                    table_row=source.table_row,
+                    table_headers=source.table_headers,
+                    table_cells=source.table_cells,
                     source_fingerprint=source.source_fingerprint,
                 )
             )

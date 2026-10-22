@@ -94,6 +94,10 @@ def _split_oversized(chunk: DocumentChunk, batch_chars: int) -> list[DocumentChu
                     locator_label=f"{chunk.locator_label} · 子段 {ordinal}",
                     locator_start=(chunk.locator_start or 0) + start,
                     locator_end=(chunk.locator_start or 0) + end,
+                    table_number=chunk.table_number,
+                    table_row=chunk.table_row,
+                    table_headers=chunk.table_headers,
+                    table_cells=chunk.table_cells,
                 )
             )
         if end >= len(chunk.content):

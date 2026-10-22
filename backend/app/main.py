@@ -10,6 +10,7 @@ from app.routers import (
     analysis,
     ask,
     auth,
+    automations,
     conversations,
     documents,
     folders,
@@ -39,6 +40,7 @@ app.include_router(documents.router)
 app.include_router(ask.router)
 app.include_router(conversations.router)
 app.include_router(analysis.router)
+app.include_router(automations.router)
 app.include_router(folders.router)
 app.include_router(knowledge_products.router)
 

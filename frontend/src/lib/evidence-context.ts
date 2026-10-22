@@ -1,7 +1,13 @@
 import { createContext, useContext } from "react";
 
+export type EvidenceTable = {
+  number: number;
+  headers: string[] | null;
+  rows: Array<{ key: string; row: number; cells: string[]; id: string; number: number }>;
+};
 export type EvidenceSource = {
   id: string; number: number; documentId: string; title: string; locator: string; excerpt: string;
+  table?: EvidenceTable;
 };
 export type EvidenceRequest = { scope: string; title: string; selected?: string; load: () => Promise<EvidenceSource[]> };
 export type OpenEvidence = EvidenceRequest & { sources: EvidenceSource[]; loading: boolean; error: string };

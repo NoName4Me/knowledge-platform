@@ -108,6 +108,29 @@ def test_extract_docx_table_cells_with_readable_locator():
     assert table_chunk.content == "项目：住宿费；标准：每晚 600 元"
     assert "第 1 张表" in table_chunk.locator_label
     assert "第 2 行" in table_chunk.locator_label
+    assert table_chunk.table_number == 1
+    assert table_chunk.table_row == 2
+    assert table_chunk.table_headers == ["项目", "标准"]
+    assert table_chunk.table_cells == ["住宿费", "每晚 600 元"]
+
+
+def test_docx_table_keeps_empty_cells_and_row_alignment():
+    buffer = io.BytesIO()
+    document = DocxDocument()
+    table = document.add_table(rows=3, cols=3)
+    table.cell(0, 0).text = "项目"
+    table.cell(0, 1).text = "上限"
+    table.cell(0, 2).text = "备注"
+    table.cell(1, 0).text = "住宿费"
+    table.cell(1, 1).text = "600 元"
+    table.cell(2, 0).text = "交通费"
+    table.cell(2, 2).text = "凭票"
+    document.save(buffer)
+
+    result = extract_document("matrix.docx", buffer.getvalue())
+    row = next(chunk for chunk in result.chunks if chunk.table_row == 3)
+    assert row.table_headers == ["项目", "上限", "备注"]
+    assert row.table_cells == ["交通费", "", "凭票"]
 
 
 def test_extract_pdf_labels_pages():

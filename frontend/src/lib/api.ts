@@ -4,6 +4,10 @@ import type {
   AnalysisSuggestionOut,
   AnalysisTaskListOut,
   AnalysisTaskOut,
+  AutomationCreateRequest,
+  AutomationDetailOut,
+  AutomationListOut,
+  AutomationOut,
   DocumentGuideOut,
   DocumentImpactOut,
   DocumentReplaceOut,
@@ -40,6 +44,10 @@ export type {
   AnalysisTaskListOut,
   AnalysisTaskOut,
   AnalysisSuggestionOut,
+  AutomationCreateRequest,
+  AutomationDetailOut,
+  AutomationListOut,
+  AutomationOut,
   DocumentOut,
   DocumentGuideOut,
   DocumentImpactOut,
@@ -266,6 +274,20 @@ async function writeRequest<T>(path: string, init: RequestInit): Promise<T> {
   try {
     return await request<T>(path, { ...init, headers });
   } catch (err) {
+    if (err instanceof ApiError && err.status === 403 && err.code === "CSRF_INVALID") {
+      // 会话 Cookie 仍在但内存令牌已陈旧时，/csrf 只会签发登录前令牌。
+      // 从当前会话恢复令牌后，以同一请求体重试一次。
+      csrfToken = null;
+      try {
+        const session = await request<MeResponse>("/api/auth/me");
+        csrfToken = session.csrf_token;
+      } catch {
+        throw err;
+      }
+      const retryHeaders = new Headers(init.headers);
+      retryHeaders.set("X-CSRF-Token", csrfToken);
+      return request<T>(path, { ...init, headers: retryHeaders });
+    }
     if (err instanceof ApiError && err.status === 403) {
       // 会话已轮换或过期：清掉缓存令牌后由下一次调用重新获取。
       csrfToken = null;
@@ -543,6 +565,51 @@ export const api = {
   getAnalysis: (teamId: string, knowledgeBaseId: string, analysisId: string) =>
     request<AnalysisDetailOut>(
       `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/analyses/${analysisId}`,
+    ),
+  deleteAnalysis: (teamId: string, knowledgeBaseId: string, analysisId: string) =>
+    writeRequest<void>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/analyses/${analysisId}`,
+      { method: "DELETE" },
+    ),
+
+  listAutomations: (teamId: string, knowledgeBaseId: string) =>
+    request<AutomationListOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/automations`,
+    ),
+  getAutomation: (teamId: string, knowledgeBaseId: string, automationId: string) =>
+    request<AutomationDetailOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/automations/${automationId}`,
+    ),
+  createAutomation: (
+    teamId: string,
+    knowledgeBaseId: string,
+    payload: AutomationCreateRequest,
+    idempotencyKey: string,
+  ) =>
+    writeRequest<AutomationOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/automations`,
+      {
+        ...jsonInit(FORM_METHOD, payload),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+      },
+    ),
+  cancelAutomation: (teamId: string, knowledgeBaseId: string, automationId: string) =>
+    writeRequest<AutomationOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/automations/${automationId}/cancel`,
+      jsonInit(FORM_METHOD, {}),
+    ),
+  continueAutomation: (teamId: string, knowledgeBaseId: string, automationId: string) =>
+    writeRequest<AutomationOut>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/automations/${automationId}/continue`,
+      jsonInit(FORM_METHOD, {}),
+    ),
+  deleteAutomation: (teamId: string, knowledgeBaseId: string, automationId: string) =>
+    writeRequest<void>(
+      `/api/teams/${teamId}/knowledge-bases/${knowledgeBaseId}/automations/${automationId}`,
+      { method: "DELETE" },
     ),
 
   ask: (teamId: string, knowledgeBaseId: string, question: string) =>

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { citationFragments, citationNumber, referenceNumbers } from "../src/lib/citation-text.ts";
+import {
+  citationFragments,
+  citationNumber,
+  groupEvidenceTables,
+  referenceNumbers,
+} from "../src/lib/citation-text.ts";
 import { knowledgeBasePath, workspaceRoute } from "../src/lib/workspace-route.ts";
 
 test("稀疏编号按正文真实标记定位，不使用引用数组下标", () => {
@@ -31,6 +36,40 @@ test("未知引用不链接、Markdown链接不误当引用、原始HTML不执�
 });
 test("同一引用多次出现时保留所有关联段落", () => {
   assert.deepEqual(citationFragments("第一项。[1]\n第二项。[1]", [1]).filter((item) => item.numbers.includes(1)).map((item) => item.text.trim()), ["第一项。", "第二项。"]);
+});
+test("同一张表的多行引用合并为一个来源并保留各行", () => {
+  const grouped = groupEvidenceTables([
+    {
+      id: "citation-1",
+      number: 1,
+      documentId: "document-1",
+      title: "差旅标准",
+      locator: "第 1 张表 · 第 2 行",
+      excerpt: "住宿费：每晚 600 元",
+      table: {
+        number: 1,
+        headers: ["项目", "标准"],
+        rows: [{ key: "citation-1", row: 2, cells: ["住宿费", "每晚 600 元"], id: "citation-1", number: 1 }],
+      },
+    },
+    {
+      id: "citation-2",
+      number: 2,
+      documentId: "document-1",
+      title: "差旅标准",
+      locator: "第 1 张表 · 第 3 行",
+      excerpt: "交通费：凭票",
+      table: {
+        number: 1,
+        headers: ["项目", "标准"],
+        rows: [{ key: "citation-2", row: 3, cells: ["交通费", "凭票"], id: "citation-2", number: 2 }],
+      },
+    },
+  ]);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].id, "document-1:1");
+  assert.equal(grouped[0].locator, "第 1 张表 · 2 行");
+  assert.deepEqual(grouped[0].table?.rows.map((row) => row.row), [2, 3]);
 });
 test("没有有效标记的回答保持原样，空草稿也可渲染", () => {
   assert.deepEqual(citationFragments("无依据说明", []), [{ text: "无依据说明", numbers: [] }]);

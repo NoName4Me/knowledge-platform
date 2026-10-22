@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import io
 import uuid
 
+from docx import Document as DocxDocument
 from sqlalchemy import select, text
 
 from tests.conftest import add_member, make_team, make_user
@@ -201,6 +203,68 @@ def test_full_loop_publishes_results_and_citations(client, session):
             assert citation["locator_label"]
 
 
+def test_full_loop_preserves_docx_table_citation_structure(client, session):
+    _, team, kb_id = _team_with_kb(client, session)
+    source = DocxDocument()
+    source.add_paragraph("差旅标准如下。")
+    table = source.add_table(rows=3, cols=3)
+    table.cell(0, 0).text = "项目"
+    table.cell(0, 1).text = "标准"
+    table.cell(0, 2).text = "备注"
+    table.cell(1, 0).text = "住宿费"
+    table.cell(1, 1).text = "每晚 500 元"
+    table.cell(2, 0).text = "交通费"
+    table.cell(2, 1).text = "凭有效票据"
+    buffer = io.BytesIO()
+    source.save(buffer)
+    document = client.post(
+        f"/api/teams/{team.id}/documents",
+        data={"knowledge_base_id": kb_id},
+        files={
+            "file": (
+                "差旅标准.docx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    ).json()
+    from app.worker import run_once
+
+    for _ in range(8):
+        run_once()
+        session.expire_all()
+        listed = client.get(
+            f"/api/teams/{team.id}/documents", params={"knowledge_base_id": kb_id}
+        ).json()
+        current = next(item for item in listed if item["id"] == document["id"])
+        if current["status"] == "ready":
+            break
+    assert current["status"] == "ready"
+
+    created = _create(
+        client,
+        team.id,
+        kb_id,
+        document["id"],
+        fields=[
+            {
+        "name": "住宿费",
+        "description": "住宿费",
+                "value_type": "text",
+            }
+        ],
+    ).json()
+    assert _run_until_finished(session, created["id"]) == "completed"
+    detail = client.get(
+        f"/api/teams/{team.id}/knowledge-bases/{kb_id}/analyses/{created['id']}"
+    ).json()
+    citation = detail["results"][0]["fields"][0]["citations"][0]
+    assert citation["table_number"] == 1
+    assert citation["table_row"] == 2
+    assert citation["table_headers"] == ["项目", "标准", "备注"]
+    assert citation["table_cells"] == ["住宿费", "每晚 500 元", ""]
+
+
 def test_idempotent_replay_returns_same_task(client, session):
     _, team, kb_id = _team_with_kb(client, session)
     document = _upload_ready(client, session, team.id, kb_id, "交通费用凭有效票据报销。")
@@ -240,6 +304,52 @@ def test_other_member_and_admin_cannot_read_others_analysis(client, session):
     listing = client.get(f"/api/teams/{team.id}/knowledge-bases/{kb_id}/analyses")
     assert listing.status_code == 200
     assert listing.json()["items"] == []
+    assert (
+        client.delete(
+            f"/api/teams/{team.id}/knowledge-bases/{kb_id}/analyses/{created['id']}"
+        ).status_code
+        == 404
+    )
+
+
+def test_delete_analysis_keeps_report_and_citation_snapshot(client, session):
+    _, team, kb_id = _team_with_kb(client, session)
+    document = _upload_ready(
+        client, session, team.id, kb_id, "差旅制度：交通费用凭有效票据报销。"
+    )
+    analysis = _create(client, team.id, kb_id, document["id"]).json()
+    assert _run_until_finished(session, analysis["id"]) == "completed"
+    base = f"/api/teams/{team.id}/knowledge-bases/{kb_id}"
+    report = client.post(
+        f"{base}/reports/from-analysis/{analysis['id']}",
+        json={"purpose": "提交审阅", "focus": "交通", "length": "medium"},
+    ).json()
+
+    response = client.delete(f"{base}/analyses/{analysis['id']}")
+    assert response.status_code == 204
+    assert client.get(f"{base}/analyses/{analysis['id']}").status_code == 404
+    reopened = client.get(f"{base}/reports/{report['id']}")
+    assert reopened.status_code == 200
+    body = reopened.json()
+    assert body["source_analysis_id"] is None
+    assert any(section["citations"] for section in body["sections"])
+    assert any(
+        source["source_type"] == "analysis"
+        and "来源分析已删除" in source["title_snapshot"]
+        and source["available"] is False
+        for source in body["sources"]
+    )
+
+
+def test_delete_running_analysis_conflicts(client, session):
+    _, team, kb_id = _team_with_kb(client, session)
+    document = _upload_ready(client, session, team.id, kb_id, "交通费用凭有效票据报销。")
+    analysis = _create(client, team.id, kb_id, document["id"]).json()
+    response = client.delete(
+        f"/api/teams/{team.id}/knowledge-bases/{kb_id}/analyses/{analysis['id']}"
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ANALYSIS_ACTIVE"
 
 
 def test_cross_team_access_is_rejected(client, session):

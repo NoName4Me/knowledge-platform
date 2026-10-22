@@ -1,11 +1,11 @@
-"""V2 前端类型的可重复生成入口。
+"""V2 与 V4 前端类型的可重复生成入口。
 
-V1 的 `frontend/src/lib/api.ts` 是手写类型。V2 不再手工维护一份平行定义：这里从
+V1 的 `frontend/src/lib/api.ts` 是手写类型。V2 起不再手工维护一份平行定义：这里从
 后端 Pydantic 合同直接生成 `frontend/src/lib/analysis-types.ts`，CI 用 `--check`
 比对，避免后端 schema 与前端类型漂移。
 
-未实现路由的 schema 通过显式导出列表生成，不为生成类型开放空实现接口；T02 实现
-路由后再把生成的类型接进 `api.ts`。
+未实现路由的 schema 通过显式导出列表生成，不为生成类型开放空实现接口；路由实现
+后再把生成的类型接进 `api.ts`。
 
 用法：
 
@@ -76,6 +76,11 @@ EXPORTED_MODELS: tuple[type[BaseModel], ...] = (
     schemas.WebDocumentCreate,
     schemas.DocumentImpactOut,
     schemas.DocumentReplaceOut,
+    schemas.AutomationCreateRequest,
+    schemas.AutomationStepOut,
+    schemas.AutomationOut,
+    schemas.AutomationDetailOut,
+    schemas.AutomationListOut,
 )
 
 HEADER = """// 由后端合同自动生成，请勿手工编辑。
@@ -83,7 +88,7 @@ HEADER = """// 由后端合同自动生成，请勿手工编辑。
 // 生成命令：cd backend && .venv/bin/python -m app.typegen
 // 一致性校验：cd backend && .venv/bin/python -m app.typegen --check
 //
-// 来源：backend/app/schemas.py 中 EXPORTED_MODELS 登记的 V2 合同模型。
+// 来源：backend/app/schemas.py 中 EXPORTED_MODELS 登记的 V2/V4 合同模型。
 """
 
 
@@ -177,7 +182,7 @@ def target_path() -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="生成或校验 V2 前端类型")
+    parser = argparse.ArgumentParser(description="生成或校验 V2/V4 前端类型")
     parser.add_argument("--check", action="store_true", help="只校验，不写入")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()

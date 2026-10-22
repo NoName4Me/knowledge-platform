@@ -631,24 +631,29 @@ def publish_document(
         for ordinal, candidate in enumerate(
             dedupe_candidates(by_field.get(field_id, []))[: bounds.max_citations_per_field]
         ):
-            session.add(
-                AnalysisCitation(
-                    id=uuid.uuid4(),
-                    team_id=task.team_id,
-                    knowledge_base_id=task.knowledge_base_id,
-                    task_id=task.id,
-                    owner_id=task.created_by_id,
-                    document_execution_id=execution_id,
-                    field_result_id=result.id,
-                    conclusion_id=None,
-                    document_id=execution.document_id,
-                    chunk_id=candidate.chunk_id,
-                    ordinal=ordinal,
-                    locator_label=_locator_label(session, candidate.chunk_id),
-                    excerpt=candidate.excerpt,
-                    source_fingerprint=execution.source_fingerprint or "",
-                )
+            citation = AnalysisCitation(
+                id=uuid.uuid4(),
+                team_id=task.team_id,
+                knowledge_base_id=task.knowledge_base_id,
+                task_id=task.id,
+                owner_id=task.created_by_id,
+                document_execution_id=execution_id,
+                field_result_id=result.id,
+                conclusion_id=None,
+                document_id=execution.document_id,
+                chunk_id=candidate.chunk_id,
+                ordinal=ordinal,
+                locator_label=_locator_label(session, candidate.chunk_id),
+                excerpt=candidate.excerpt,
+                source_fingerprint=execution.source_fingerprint or "",
             )
+            chunk = session.get(DocumentChunk, candidate.chunk_id)
+            if chunk is not None:
+                citation.table_number = chunk.table_number
+                citation.table_row = chunk.table_row
+                citation.table_headers = chunk.table_headers
+                citation.table_cells = chunk.table_cells
+            session.add(citation)
 
     execution.status = "succeeded"
     execution.model_calls = model_calls
